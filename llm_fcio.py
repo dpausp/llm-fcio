@@ -230,14 +230,29 @@ class RzobEmbeddingModel(llm.EmbeddingModel):
 # ── Model Registration ──────────────────────────────────
 
 
+_SHORT_CHAT_ALIASES = {
+    "gpt-oss:20b": "20b",
+    "gpt-oss:120b": "120b",
+    "mistral-small3.2:latest": "mistral",
+}
+
+_SHORT_EMBED_ALIASES = {
+    "bge-m3:567m": "bge",
+    "Nomic-embed-text:v1.5": "nomic",
+    "embeddinggemma:300m": "gemma",
+}
+
+
 @llm.hookimpl
 def register_models(register):
     for m in _load_models():
         mid = m["id"]
         safe = m.get("safe_id", mid.replace(":", "-"))
+        short = _SHORT_CHAT_ALIASES.get(mid)
+        aliases = [safe] + ([short] if short else [])
         register(
             RzobModel(f"fcio-rzob/{safe}", mid),
-            aliases=(safe,),
+            aliases=aliases,
         )
 
 
@@ -249,9 +264,11 @@ def register_embedding_models(register):
         if not any(k in mid.lower() for k in embed_keywords):
             continue
         safe = m.get("safe_id", mid.replace(":", "-"))
+        short = _SHORT_EMBED_ALIASES.get(mid)
+        aliases = [safe] + ([short] if short else [])
         register(
             RzobEmbeddingModel(f"fcio-rzob/{safe}", mid),
-            aliases=(safe,),
+            aliases=aliases,
         )
 
 
