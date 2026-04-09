@@ -1,0 +1,6 @@
+[project]
+name = "llm-fcio"
+version = "0.1"
+
+[project.entry-points.llm]
+fcio = "llm_fcio"
