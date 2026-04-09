@@ -1,6 +1,8 @@
 """llm-rzob: Plugin für https://ai.rzob.fcio.net/openai/v1"""
 
 import json
+import subprocess
+
 import click
 import httpx
 from httpx_sse import connect_sse
@@ -72,6 +74,40 @@ def _load_models():
         data = [{"id": m, "safe_id": m} for m in data]
         p.write_text(json.dumps(data))
     return data
+
+
+def _resolve_model(model_hint: str, key: str) -> str:
+    """Resolve fuzzy model name to exact model ID via fzf."""
+    resp = api_request("GET", "/models", key)
+    all_ids = [m["id"] for m in resp.json().get("data", [])]
+
+    if model_hint in all_ids:
+        return model_hint
+
+    try:
+        result = subprocess.run(
+            ["fzf", "-1", "--query", model_hint, "--no-mouse"],
+            input="\n".join(all_ids),
+            capture_output=True,
+            text=True,
+        )
+        picked = result.stdout.strip()
+        if picked:
+            return picked
+    except FileNotFoundError:
+        # Fallback: substring match without fzf
+        matches = [m for m in all_ids if model_hint.lower() in m.lower()]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise click.ClickException(
+                f"Ambiguous model '{model_hint}': {', '.join(matches)} "
+                "(install fzf for interactive selection)"
+            )
+
+    raise click.ClickException(
+        f"Unknown model '{model_hint}'. Available: {', '.join(all_ids)}"
+    )
 
 
 # ── Model Class ─────────────────────────────────────────
@@ -259,6 +295,7 @@ def register_commands(cli):
     ):
         """Test chat completions with a model"""
         key = get_api_key()
+        model_id = _resolve_model(model_id, key)
 
         messages = []
         if system:
