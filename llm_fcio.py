@@ -199,6 +199,34 @@ class RzobModel(llm.KeyModel):
                 response.response_json = data
 
 
+# ── Embedding Model ──────────────────────────────────────
+
+
+class RzobEmbeddingModel(llm.EmbeddingModel):
+    needs_key = KEY_NAME
+    key_env_var = "FCIO_RZOB_API_KEY"
+    batch_size = 100
+
+    def __init__(self, model_id: str, api_id: str):
+        self.model_id = model_id
+        self.api_id = api_id
+
+    def embed_batch(self, items):
+        key = self.get_key()
+        resp = httpx.post(
+            f"{API_BASE}/embeddings",
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            json={"model": self.api_id, "input": list(items)},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        for entry in resp.json()["data"]:
+            yield entry["embedding"]
+
+
 # ── Model Registration ──────────────────────────────────
 
 
@@ -209,6 +237,20 @@ def register_models(register):
         safe = m.get("safe_id", mid.replace(":", "-"))
         register(
             RzobModel(f"fcio-rzob/{safe}", mid),
+            aliases=(safe,),
+        )
+
+
+@llm.hookimpl
+def register_embedding_models(register):
+    embed_keywords = ("embed", "bge", "gemma")
+    for m in _load_models():
+        mid = m["id"]
+        if not any(k in mid.lower() for k in embed_keywords):
+            continue
+        safe = m.get("safe_id", mid.replace(":", "-"))
+        register(
+            RzobEmbeddingModel(f"fcio-rzob/{safe}", mid),
             aliases=(safe,),
         )
 
