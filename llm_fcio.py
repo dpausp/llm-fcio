@@ -6,7 +6,7 @@ import httpx
 from httpx_sse import connect_sse
 import llm
 from pydantic import Field
-from typing import Optional, Iterator
+from collections.abc import Iterator
 
 API_BASE = "https://ai.rzob.fcio.net/openai/v1"
 KEY_NAME = "fcio-rzob"
@@ -29,9 +29,8 @@ def api_request(
     method: str,
     path: str,
     key: str,
-    json_data: Optional[dict] = None,
-    params: Optional[dict] = None,
-    stream: bool = False,
+    json_data: dict | None = None,
+    params: dict | None = None,
 ) -> httpx.Response:
     """Generic API request helper mit Auth + Error-Handling"""
     url = f"{API_BASE}/{path.lstrip('/')}"
@@ -41,21 +40,15 @@ def api_request(
         "Accept": "application/json",
     }
 
-    client = httpx.Client(timeout=30.0)
-    try:
+    with httpx.Client(timeout=30.0) as client:
         response = client.request(
-            method, url, headers=headers, json=json_data, params=params, stream=stream
+            method, url, headers=headers, json=json_data, params=params,
         )
         if response.status_code >= 400:
-            try:
-                err = response.json()
-                msg = err.get("detail", err.get("error", {}).get("message", str(err)))
-            except Exception:
-                msg = response.text[:200]
+            err = response.json()
+            msg = err.get("detail", err.get("error", {}).get("message", str(err)))
             raise click.ClickException(f"{response.status_code}: {msg}")
         return response
-    finally:
-        client.close()
 
 
 # ── Model Cache ─────────────────────────────────────────
@@ -86,13 +79,13 @@ class RzobModel(llm.KeyModel):
     can_stream = True
 
     class Options(llm.Options):
-        temperature: Optional[float] = Field(
+        temperature: float | None = Field(
             description="Sampling temperature (0-2)", ge=0.0, le=2.0, default=None
         )
-        max_tokens: Optional[int] = Field(
+        max_tokens: int | None = Field(
             description="Max tokens in response", ge=1, default=None
         )
-        top_p: Optional[float] = Field(
+        top_p: float | None = Field(
             description="Nucleus sampling parameter", ge=0.0, le=1.0, default=None
         )
 
@@ -208,7 +201,7 @@ def register_commands(cli):
     @rzob.command("models")
     @click.option("--json", "as_json", is_flag=True, help="Output as raw JSON")
     @click.option("--filter", "filt", help="Filter models by name substring")
-    def cmd_models(as_json: bool, filt: Optional[str]):
+    def cmd_models(as_json: bool, filt: str | None):
         """List available models from the API"""
         key = get_api_key()
         resp = api_request("GET", "/models", key)
@@ -242,10 +235,10 @@ def register_commands(cli):
     @click.option("-i", "--interactive", is_flag=True, help="Interactive chat mode")
     def cmd_chat(
         model_id: str,
-        prompt: Optional[str],
-        system: Optional[str],
+        prompt: str | None,
+        system: str | None,
         temperature: float,
-        max_tokens: Optional[int],
+        max_tokens: int | None,
         stream: bool,
         as_json: bool,
         interactive: bool,
@@ -287,7 +280,7 @@ def register_commands(cli):
     @click.argument("text", nargs=-1, required=True)
     @click.option("--json", "as_json", is_flag=True, help="Output raw JSON")
     @click.option("-d", "--dimensions", type=int, help="Output dimension")
-    def cmd_embed(model_id: str, text: tuple[str], as_json: bool, dimensions: Optional[int]):
+    def cmd_embed(model_id: str, text: tuple[str], as_json: bool, dimensions: int | None):
         """Test embedding generation"""
         key = get_api_key()
 
@@ -401,7 +394,7 @@ def _build_chat_body(
     model_id: str,
     messages: list,
     temperature: float,
-    max_tokens: Optional[int],
+    max_tokens: int | None,
 ) -> dict:
     body = {
         "model": model_id,
