@@ -225,11 +225,16 @@ def register_commands(cli):
         if as_json:
             click.echo(json.dumps(models, indent=2))
         else:
-            click.echo(f"{'ID':<40}")
-            click.echo("-" * 40)
+            click.echo(f"{'Type':>10}  {'ID'}")
+            click.echo("-" * 55)
             for m in models:
                 mid = m.get("id", "unknown")
-                click.echo(f"{mid:<40}")
+                mtype = (
+                    "embed"
+                    if any(k in mid.lower() for k in ("embed", "bge", "gemma"))
+                    else "chat"
+                )
+                click.echo(f"{mtype:>10}  {mid}")
 
     # ── chat ───────────────────────────────────────────
 
