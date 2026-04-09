@@ -97,11 +97,23 @@ Defaults: `--glob *.md`, `-m bge-m3-567m`, `--chunk-size 30`, `--overlap 5`. Fil
 
 Chunk IDs encode file path and line range (e.g. `src/main.py:42-71`), enabling precise similarity results.
 
-```bash
-# Semantic search across ingested chunks
-llm similar my-project -c "how does authentication work"
+### Example: Ingesting a Python Project
 
-# Check collections
+```bash
+# Create collection and ingest markdown docs
+llm rzob ingest my-project . --glob "*.md" --yes
+
+# Add Python source files to the same collection
+llm rzob ingest my-project . --glob "*.py" --chunk-size 50 --overlap 10 --yes
+
+# Search across both code and docs
+llm similar my-project -c "how does error handling work"
+```
+
+Both invocations write into the same `my-project` collection. A single `llm similar` query then searches across code, tests, and documentation.
+
+```bash
+# Check what's in a collection
 llm collections list
 
 # Delete and rebuild
