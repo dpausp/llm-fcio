@@ -1,8 +1,0 @@
-README.md
-llm_fcio.py
-pyproject.toml
-llm_fcio.egg-info/PKG-INFO
-llm_fcio.egg-info/SOURCES.txt
-llm_fcio.egg-info/dependency_links.txt
-llm_fcio.egg-info/entry_points.txt
-llm_fcio.egg-info/top_level.txt
