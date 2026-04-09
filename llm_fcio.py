@@ -2,13 +2,16 @@
 
 import json
 import subprocess
+from pathlib import Path
 
 import click
 import httpx
 from httpx_sse import connect_sse
 import llm
+import pathspec
 from pydantic import Field
 from collections.abc import Iterator
+import sqlite_utils
 
 API_BASE = "https://ai.rzob.fcio.net/openai/v1"
 KEY_NAME = "fcio-rzob"
@@ -272,6 +275,73 @@ def register_embedding_models(register):
         )
 
 
+# ── Ingest Helpers ──────────────────────────────────────
+
+
+_HARD_EXCLUDES = [
+    "venv/",
+    ".venv/",
+    "node_modules/",
+    "__pycache__/",
+    ".git/",
+    "*.egg-info/",
+]
+
+
+def _discover_files(
+    paths: tuple[Path, ...],
+    glob_pattern: str,
+) -> list[Path]:
+    """Discover files from paths, applying gitignore + hard-exclude filtering."""
+    all_files: list[Path] = []
+    for p in paths:
+        p = p.resolve()
+        if p.is_file():
+            all_files.append(p)
+        elif p.is_dir():
+            gitignore_path = p / ".gitignore"
+            spec_lines: list[str] = []
+            if gitignore_path.exists():
+                spec_lines = gitignore_path.read_text().splitlines()
+            spec_lines.extend(_HARD_EXCLUDES)
+            spec = pathspec.PathSpec.from_lines("gitwildmatch", spec_lines)
+
+            for candidate in sorted(p.rglob(glob_pattern)):
+                rel = candidate.relative_to(p)
+                if not spec.match_file(str(rel)):
+                    all_files.append(candidate)
+        else:
+            raise click.ClickException(f"Path not found: {p}")
+    return all_files
+
+
+def _chunk_lines(
+    text: str,
+    filepath: str,
+    chunk_size: int,
+    overlap: int,
+) -> list[tuple[str, str]]:
+    """Split text into line-based overlapping chunks.
+
+    Returns list of (chunk_id, chunk_text) tuples.
+    Chunk ID format: 'filepath:start-end' (1-based lines).
+    """
+    lines = text.splitlines()
+    if not lines:
+        return []
+    chunks: list[tuple[str, str]] = []
+    start = 0
+    while start < len(lines):
+        end = min(start + chunk_size, len(lines))
+        chunk_text = "\n".join(lines[start:end])
+        chunk_id = f"{filepath}:{start + 1}-{end}"
+        chunks.append((chunk_id, chunk_text))
+        if end >= len(lines):
+            break
+        start += chunk_size - overlap
+    return chunks
+
+
 # ── CLI Commands ────────────────────────────────────────
 
 
@@ -499,6 +569,102 @@ def register_commands(cli):
             click.echo(f"⚠️  Token endpoint not supported: {e}", err=True)
             total_chars = sum(len(t) for t in text)
             click.echo(f"Rough estimate: ~{total_chars // 4} tokens (heuristic)")
+
+    # ── ingest ─────────────────────────────────────────
+
+    @rzob.command("ingest")
+    @click.argument("collection")
+    @click.argument("paths", nargs=-1, required=True)
+    @click.option(
+        "--glob",
+        "glob_pattern",
+        default="*.md",
+        help="File glob for directory discovery (default: *.md)",
+    )
+    @click.option(
+        "-m",
+        "--model",
+        "model_id",
+        default="bge-m3-567m",
+        help="Embedding model alias (default: bge-m3-567m)",
+    )
+    @click.option(
+        "--chunk-size", type=int, default=30, help="Lines per chunk (default: 30)"
+    )
+    @click.option(
+        "--overlap",
+        type=int,
+        default=5,
+        help="Overlap lines between chunks (default: 5)",
+    )
+    @click.option(
+        "--yes", "skip_confirm", is_flag=True, help="Skip confirmation preview"
+    )
+    def cmd_ingest(
+        collection: str,
+        paths: tuple[str, ...],
+        glob_pattern: str,
+        model_id: str,
+        chunk_size: int,
+        overlap: int,
+        skip_confirm: bool,
+    ):
+        """Ingest files into an llm embedding collection.
+
+        COLLECTION is the collection name. PATHS are directories (recursive
+        discovery) or explicit files.
+
+        \b
+        Examples:
+          llm rzob ingest mydocs ./docs/
+          llm rzob ingest mydocs ./docs/ --glob '*.py'
+          llm rzob ingest mydocs file1.md file2.md
+          llm rzob ingest mydocs ./src/ -m bge --chunk-size 50 --overlap 10
+        """
+        resolved_paths = tuple(Path(p) for p in paths)
+        files = _discover_files(resolved_paths, glob_pattern)
+
+        if not files:
+            raise click.ClickException("No files found matching criteria")
+
+        # Build chunk map: {filepath: [(chunk_id, chunk_text), ...]}
+        file_chunks: dict[str, list[tuple[str, str]]] = {}
+        for f in files:
+            text = f.read_text(errors="replace")
+            display_path = str(f)
+            chunks = _chunk_lines(text, display_path, chunk_size, overlap)
+            if chunks:
+                file_chunks[display_path] = chunks
+
+        total_chunks = sum(len(cs) for cs in file_chunks.values())
+
+        if not skip_confirm:
+            click.echo("Files to ingest:")
+            max_name_len = max(len(n) for n in file_chunks)
+            for name, chunks in file_chunks.items():
+                padded = name.ljust(max_name_len)
+                click.echo(f"  {padded}  {len(chunks)} chunks")
+            click.echo(f"Total: {len(file_chunks)} files, {total_chunks} chunks")
+            click.echo()
+            if not click.confirm("Continue", default=False):
+                raise click.ClickException("Aborted")
+
+        # Create collection and embed
+        db = sqlite_utils.Database(llm.user_dir() / "embeddings.db")
+        if llm.Collection.exists(db, collection):
+            col = llm.Collection(collection, db)
+        else:
+            col = llm.Collection(collection, db=db, model_id=model_id)
+        click.echo(f"Using model: {col.model().model_id}", err=True)
+
+        for name, chunks in file_chunks.items():
+            click.echo(f"  {name} ({len(chunks)} chunks)...", err=True)
+            col.embed_multi(
+                ((cid, text) for cid, text in chunks),
+                store=True,
+            )
+
+        click.echo(f"Ingested {total_chunks} chunks into '{collection}'", err=True)
 
 
 # ── Chat Helpers ────────────────────────────────────────

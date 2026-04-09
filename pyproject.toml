@@ -1,6 +1,7 @@
 [project]
 name = "llm-fcio"
 version = "0.1"
+dependencies = ["llm", "httpx", "httpx-sse", "pathspec", "sqlite-utils"]
 
 [project.entry-points.llm]
 fcio = "llm_fcio"
