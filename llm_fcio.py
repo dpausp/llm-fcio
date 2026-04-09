@@ -42,7 +42,11 @@ def api_request(
 
     with httpx.Client(timeout=30.0) as client:
         response = client.request(
-            method, url, headers=headers, json=json_data, params=params,
+            method,
+            url,
+            headers=headers,
+            json=json_data,
+            params=params,
         )
         if response.status_code >= 400:
             err = response.json()
@@ -91,7 +95,7 @@ class RzobModel(llm.KeyModel):
 
     def __init__(self, model_id: str, api_id: str):
         self.model_id = model_id  # "fcio-rzob/gpt-oss-20b"
-        self.api_id = api_id      # "gpt-oss-20b" für API-Call
+        self.api_id = api_id  # "gpt-oss-20b" für API-Call
 
     def __str__(self):
         return f"rzob: {self.api_id}"
@@ -127,8 +131,12 @@ class RzobModel(llm.KeyModel):
             body["stream"] = True
             with httpx.Client() as client:
                 with connect_sse(
-                    client, "POST", f"{API_BASE}/chat/completions",
-                    headers=headers, json=body, timeout=None,
+                    client,
+                    "POST",
+                    f"{API_BASE}/chat/completions",
+                    headers=headers,
+                    json=body,
+                    timeout=None,
                 ) as es:
                     es.response.raise_for_status()
                     for sse in es.iter_sse():
@@ -145,7 +153,9 @@ class RzobModel(llm.KeyModel):
             with httpx.Client() as client:
                 resp = client.post(
                     f"{API_BASE}/chat/completions",
-                    headers=headers, json=body, timeout=None,
+                    headers=headers,
+                    json=body,
+                    timeout=None,
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -189,10 +199,12 @@ def register_commands(cli):
         models = []
         for m in data:
             mid = m["id"] if isinstance(m, dict) else str(m)
-            models.append({
-                "id": mid,
-                "safe_id": mid.replace(":", "-").replace(".", "_"),
-            })
+            models.append(
+                {
+                    "id": mid,
+                    "safe_id": mid.replace(":", "-").replace(".", "_"),
+                }
+            )
         _cache_path().write_text(json.dumps(models, indent=2))
         click.echo(f"Cached {len(models)} models", err=True)
 
@@ -213,14 +225,11 @@ def register_commands(cli):
         if as_json:
             click.echo(json.dumps(models, indent=2))
         else:
-            click.echo(f"{'ID':<40} {'Context':>10} {'Vision':>8} {'Tools':>7}")
-            click.echo("-" * 70)
+            click.echo(f"{'ID':<40}")
+            click.echo("-" * 40)
             for m in models:
-                mid = m.get("id", "unknown")[:38]
-                ctx = m.get("context_window", m.get("max_tokens", "?"))
-                vis = "✅" if m.get("vision") else "–"
-                tools = "✅" if m.get("supports_tools", True) else "–"
-                click.echo(f"{mid:<40} {str(ctx):>10} {vis:>8} {tools:>7}")
+                mid = m.get("id", "unknown")
+                click.echo(f"{mid:<40}")
 
     # ── chat ───────────────────────────────────────────
 
@@ -280,7 +289,9 @@ def register_commands(cli):
     @click.argument("text", nargs=-1, required=True)
     @click.option("--json", "as_json", is_flag=True, help="Output raw JSON")
     @click.option("-d", "--dimensions", type=int, help="Output dimension")
-    def cmd_embed(model_id: str, text: tuple[str], as_json: bool, dimensions: int | None):
+    def cmd_embed(
+        model_id: str, text: tuple[str], as_json: bool, dimensions: int | None
+    ):
         """Test embedding generation"""
         key = get_api_key()
 
@@ -300,7 +311,7 @@ def register_commands(cli):
             embeddings = data.get("data", [])
             for i, emb in enumerate(embeddings):
                 vec = emb.get("embedding", [])
-                click.echo(f"Text {i+1}: [{len(vec)} dims] {vec[:5]}... (truncated)")
+                click.echo(f"Text {i + 1}: [{len(vec)} dims] {vec[:5]}... (truncated)")
                 click.echo(f"  Usage: {emb.get('usage', {})}")
 
     # ── health ─────────────────────────────────────────
