@@ -239,17 +239,17 @@ def register_commands(cli):
     # ── chat ───────────────────────────────────────────
 
     @rzob.command("chat")
-    @click.argument("model_id")
-    @click.argument("prompt", required=False)
+    @click.argument("prompt", nargs=-1, required=False)
+    @click.option("-m", "--model", "model_id", default="gpt-oss:20b", help="Model ID")
     @click.option("-s", "--system", help="System prompt")
     @click.option("-t", "--temperature", type=float, default=0.7, help="Temperature")
-    @click.option("-m", "--max-tokens", type=int, help="Max tokens")
+    @click.option("--max-tokens", type=int, help="Max tokens")
     @click.option("--stream/--no-stream", default=True, help="Stream response")
     @click.option("--json", "as_json", is_flag=True, help="Output full JSON response")
     @click.option("-i", "--interactive", is_flag=True, help="Interactive chat mode")
     def cmd_chat(
+        prompt: tuple[str],
         model_id: str,
-        prompt: str | None,
         system: str | None,
         temperature: float,
         max_tokens: int | None,
@@ -263,6 +263,8 @@ def register_commands(cli):
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
+
+        prompt_text = " ".join(prompt) if prompt else None
 
         if interactive:
             click.echo(f"Interactive chat with {model_id} (Ctrl+D to exit)")
@@ -281,9 +283,9 @@ def register_commands(cli):
                 _send_chat_request(key, body, stream, as_json)
                 messages.append({"role": "assistant", "content": "[...]"})
         else:
-            if not prompt:
+            if not prompt_text:
                 raise click.ClickException("Prompt required (or use --interactive)")
-            messages.append({"role": "user", "content": prompt})
+            messages.append({"role": "user", "content": prompt_text})
             body = _build_chat_body(model_id, messages, temperature, max_tokens)
             _send_chat_request(key, body, stream, as_json)
 
