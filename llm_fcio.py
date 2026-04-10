@@ -12,6 +12,15 @@ import pathspec
 from pydantic import Field
 from collections.abc import Iterator
 import sqlite_utils
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
 API_BASE = "https://ai.rzob.fcio.net/openai/v1"
 KEY_NAME = "fcio-rzob"
@@ -657,12 +666,27 @@ def register_commands(cli):
             col = llm.Collection(collection, db=db, model_id=model_id)
         click.echo(f"Using model: {col.model().model_id}", err=True)
 
-        for name, chunks in file_chunks.items():
-            click.echo(f"  {name} ({len(chunks)} chunks)...", err=True)
-            col.embed_multi(
-                ((cid, text) for cid, text in chunks),
-                store=True,
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("{task.fields[filename]}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+        ) as progress:
+            task = progress.add_task(
+                "ingest", total=total_chunks, filename="Starting..."
             )
+
+            def _tracked():
+                for name, chunks in file_chunks.items():
+                    fname = Path(name).name
+                    for cid, text in chunks:
+                        progress.update(task, filename=fname)
+                        yield cid, text
+                        progress.advance(task)
+
+            col.embed_multi(_tracked(), store=True)
 
         click.echo(f"Ingested {total_chunks} chunks into '{collection}'", err=True)
 
