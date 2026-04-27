@@ -141,6 +141,14 @@ class RzobModel(llm.KeyModel):
         top_p: float | None = Field(
             description="Nucleus sampling parameter", ge=0.0, le=1.0, default=None
         )
+        # Tools for function calling (gpt-oss native)
+        tools: list[dict] | None = Field(
+            description="List of function definitions for tool calling", default=None
+        )
+        # Force JSON/structured output
+        response_format: dict | None = Field(
+            description='Response format (e.g. {"type": "json_object"})', default=None
+        )
 
     def __init__(self, model_id: str, api_id: str):
         self.model_id = model_id  # "fcio-rzob/gpt-oss-20b"
