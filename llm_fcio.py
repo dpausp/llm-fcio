@@ -129,6 +129,7 @@ class RzobModel(llm.KeyModel):
     needs_key = KEY_NAME
     key_env_var = "FCIO_RZOB_API_KEY"
     can_stream = True
+    attachment_types = {"text/plain"}
 
     class Options(llm.Options):
         temperature: float | None = Field(
@@ -159,8 +160,18 @@ class RzobModel(llm.KeyModel):
                 if r.prompt.prompt:
                     messages.append({"role": "user", "content": r.prompt.prompt})
                 messages.append({"role": "assistant", "content": r.text_or_raise()})
+        # Build user message with attachments
+        user_content_parts = []
+        for att in prompt.attachments or []:
+            att_type = att.resolve_type()
+            if att_type == "text/plain":
+                text = att.content_bytes().decode("utf-8")
+                user_content_parts.append({"type": "text", "text": text})
         if prompt.prompt:
-            messages.append({"role": "user", "content": prompt.prompt})
+            user_content_parts.append({"type": "text", "text": prompt.prompt})
+        if user_content_parts:
+            content = user_content_parts[0]["text"] if len(user_content_parts) == 1 else user_content_parts
+            messages.append({"role": "user", "content": content})
 
         body = {"model": self.api_id, "messages": messages}
         if prompt.options.temperature is not None:
@@ -192,10 +203,13 @@ class RzobModel(llm.KeyModel):
                             continue
                         try:
                             event = json.loads(sse.data)
-                            delta = event["choices"][0].get("delta", {})
+                            choices = event.get("choices", [])
+                            if not choices:
+                                continue
+                            delta = choices[0].get("delta", {})
                             if delta.get("content"):
                                 yield delta["content"]
-                        except (KeyError, json.JSONDecodeError):
+                        except (KeyError, json.JSONDecodeError, IndexError):
                             continue
         else:
             with httpx.Client() as client:
@@ -207,7 +221,12 @@ class RzobModel(llm.KeyModel):
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                yield data["choices"][0]["message"]["content"]
+                choices = data.get("choices") or []
+                if not choices:
+                    raise click.ClickException("Empty response from API - no choices returned")
+                msg = choices[0].get("message") or {}
+                content = msg.get("content") or ""
+                yield content
                 response.response_json = data
 
 
@@ -731,10 +750,13 @@ def _send_chat_request(key: str, body: dict, stream: bool, as_json: bool):
                         continue
                     try:
                         event = json.loads(sse.data)
-                        delta = event["choices"][0].get("delta", {})
+                        choices = event.get("choices", [])
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta", {})
                         if delta.get("content"):
                             click.echo(delta["content"], nl=False)
-                    except (KeyError, json.JSONDecodeError):
+                    except (KeyError, json.JSONDecodeError, IndexError):
                         continue
                 click.echo()
         except click.ClickException:
@@ -744,10 +766,13 @@ def _send_chat_request(key: str, body: dict, stream: bool, as_json: bool):
     else:
         resp = api_request("POST", "/chat/completions", key, json_data=body)
         data = resp.json()
+        choices = data.get("choices", [])
+        if not choices:
+            raise click.ClickException("Empty response from API - no choices returned")
         if as_json:
             click.echo(json.dumps(data, indent=2))
         else:
-            content = data["choices"][0]["message"]["content"]
+            content = choices[0]["message"].get("content", "")
             click.echo(content)
             if "usage" in data:
                 u = data["usage"]
