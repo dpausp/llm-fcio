@@ -10,3 +10,4 @@ node_modules/
 # Sphinx build output
 docs/_build/
 docs/autoapi/
+.agents/tmp/
