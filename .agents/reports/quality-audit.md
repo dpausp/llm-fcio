@@ -363,3 +363,44 @@ No code changes made in this audit.
 ## Raw Data Location
 
 `.agents/tmp/quality/` — inventory/, baseline/, extreme/, analysis/, e2e/
+
+## Tidy Session — 2026-05-10
+
+### Mock Hardening
+- Bare mocks before: 0 → after: 0
+- Migrated to typed: 0
+- Untouchable: 0
+- Note: No tests exist — no mocks to harden
+
+### Suppression Cleanup
+- Linter suppressions removed: 15 (I001: 1 import sort + COM812: 14 trailing commas — all auto-fixed)
+- Type-check suppressions removed: 0
+- Test skips removed: 0
+- Restored (still needed): 0
+- Blind exception catches fixed: 2 (lines 549, 772 → `except httpx.HTTPError`)
+- raise-without-from fixed: 2 (lines 115, 773 → added `from None` / `from e`)
+- Config gaps fixed: 1 (`requires-python = ">=3.14"` added to pyproject.toml)
+
+### Post-Tidy Gates
+| Tool | Before | After |
+|------|--------|-------|
+| ruff check . | 0 issues | 0 issues |
+| ruff BLE001,B904,I001,COM812 | 9 issues | 0 issues |
+| py_compile | PASS | PASS |
+| import llm_fcio | PASS | PASS |
+| llm rzob --help | PASS | PASS |
+
+### Code Volume
+| File | Change |
+|------|--------|
+| llm_fcio.py | +52/-24 lines |
+| pyproject.toml | +1 line |
+
+### Skipped (Not Mechanical)
+- NAV-01 Test Infrastructure — needs design decision
+- NAV-02 Tool Configuration — needs design decision on rule selection
+- NAV-04 Type Annotations — 41 annotations, needs approach decision
+- NAV-06 Dead Code Options — needs design decision (implement or remove)
+- NAV-07 Cyclomatic Complexity — architecture change
+- NAV-08 Logging — new feature
+- NAV-10 subprocess S607 — needs design decision

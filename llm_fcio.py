@@ -2,16 +2,16 @@
 
 import json
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import click
 import httpx
-from httpx_sse import connect_sse
 import llm
 import pathspec
-from pydantic import Field
-from collections.abc import Iterator
 import sqlite_utils
+from httpx_sse import connect_sse
+from pydantic import Field
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -34,7 +34,7 @@ def get_api_key() -> str:
     key = llm.get_key("", KEY_NAME, "FCIO_RZOB_API_KEY")
     if not key:
         raise click.ClickException(
-            f"API key not found. Set with: llm keys set {KEY_NAME}"
+            f"API key not found. Set with: llm keys set {KEY_NAME}",
         )
     return key
 
@@ -114,11 +114,11 @@ def _resolve_model(model_hint: str, key: str) -> str:
         if len(matches) > 1:
             raise click.ClickException(
                 f"Ambiguous model '{model_hint}': {', '.join(matches)} "
-                "(install fzf for interactive selection)"
-            )
+                "(install fzf for interactive selection)",
+            ) from None
 
     raise click.ClickException(
-        f"Unknown model '{model_hint}'. Available: {', '.join(all_ids)}"
+        f"Unknown model '{model_hint}'. Available: {', '.join(all_ids)}",
     )
 
 
@@ -133,21 +133,31 @@ class RzobModel(llm.KeyModel):
 
     class Options(llm.Options):
         temperature: float | None = Field(
-            description="Sampling temperature (0-2)", ge=0.0, le=2.0, default=None
+            description="Sampling temperature (0-2)",
+            ge=0.0,
+            le=2.0,
+            default=None,
         )
         max_tokens: int | None = Field(
-            description="Max tokens in response", ge=1, default=None
+            description="Max tokens in response",
+            ge=1,
+            default=None,
         )
         top_p: float | None = Field(
-            description="Nucleus sampling parameter", ge=0.0, le=1.0, default=None
+            description="Nucleus sampling parameter",
+            ge=0.0,
+            le=1.0,
+            default=None,
         )
         # Tools for function calling (gpt-oss native)
         tools: list[dict] | None = Field(
-            description="List of function definitions for tool calling", default=None
+            description="List of function definitions for tool calling",
+            default=None,
         )
         # Force JSON/structured output
         response_format: dict | None = Field(
-            description='Response format (e.g. {"type": "json_object"})', default=None
+            description='Response format (e.g. {"type": "json_object"})',
+            default=None,
         )
 
     def __init__(self, model_id: str, api_id: str):
@@ -178,7 +188,11 @@ class RzobModel(llm.KeyModel):
         if prompt.prompt:
             user_content_parts.append({"type": "text", "text": prompt.prompt})
         if user_content_parts:
-            content = user_content_parts[0]["text"] if len(user_content_parts) == 1 else user_content_parts
+            content = (
+                user_content_parts[0]["text"]
+                if len(user_content_parts) == 1
+                else user_content_parts
+            )
             messages.append({"role": "user", "content": content})
 
         body = {"model": self.api_id, "messages": messages}
@@ -217,7 +231,7 @@ class RzobModel(llm.KeyModel):
                             delta = choices[0].get("delta", {})
                             if delta.get("content"):
                                 yield delta["content"]
-                        except (KeyError, json.JSONDecodeError, IndexError):
+                        except KeyError, json.JSONDecodeError, IndexError:
                             continue
         else:
             with httpx.Client() as client:
@@ -231,7 +245,9 @@ class RzobModel(llm.KeyModel):
                 data = resp.json()
                 choices = data.get("choices") or []
                 if not choices:
-                    raise click.ClickException("Empty response from API - no choices returned")
+                    raise click.ClickException(
+                        "Empty response from API - no choices returned",
+                    )
                 msg = choices[0].get("message") or {}
                 content = msg.get("content") or ""
                 yield content
@@ -404,7 +420,7 @@ def register_commands(cli):
                 {
                     "id": mid,
                     "safe_id": mid.replace(":", "-").replace(".", "_"),
-                }
+                },
             )
         _cache_path().write_text(json.dumps(models, indent=2))
         click.echo(f"Cached {len(models)} models", err=True)
@@ -499,7 +515,10 @@ def register_commands(cli):
     @click.option("--json", "as_json", is_flag=True, help="Output raw JSON")
     @click.option("-d", "--dimensions", type=int, help="Output dimension")
     def cmd_embed(
-        model_id: str, text: tuple[str], as_json: bool, dimensions: int | None
+        model_id: str,
+        text: tuple[str],
+        as_json: bool,
+        dimensions: int | None,
     ):
         """Test embedding generation"""
         key = get_api_key()
@@ -546,7 +565,7 @@ def register_commands(cli):
         try:
             r = httpx.get(API_BASE.replace("/v1", ""), timeout=5)
             results["base_url"] = f"✅ {r.status_code}"
-        except Exception as e:
+        except httpx.HTTPError as e:
             results["base_url"] = f"❌ {e}"
 
         # Chat endpoint smoke test
@@ -625,7 +644,10 @@ def register_commands(cli):
         help="Embedding model alias (default: bge-m3-567m)",
     )
     @click.option(
-        "--chunk-size", type=int, default=30, help="Lines per chunk (default: 30)"
+        "--chunk-size",
+        type=int,
+        default=30,
+        help="Lines per chunk (default: 30)",
     )
     @click.option(
         "--overlap",
@@ -634,7 +656,10 @@ def register_commands(cli):
         help="Overlap lines between chunks (default: 5)",
     )
     @click.option(
-        "--yes", "skip_confirm", is_flag=True, help="Skip confirmation preview"
+        "--yes",
+        "skip_confirm",
+        is_flag=True,
+        help="Skip confirmation preview",
     )
     def cmd_ingest(
         collection: str,
@@ -702,7 +727,9 @@ def register_commands(cli):
             TimeRemainingColumn(),
         ) as progress:
             task = progress.add_task(
-                "ingest", total=total_chunks, filename="Starting..."
+                "ingest",
+                total=total_chunks,
+                filename="Starting...",
             )
 
             def _tracked():
@@ -764,13 +791,13 @@ def _send_chat_request(key: str, body: dict, stream: bool, as_json: bool):
                         delta = choices[0].get("delta", {})
                         if delta.get("content"):
                             click.echo(delta["content"], nl=False)
-                    except (KeyError, json.JSONDecodeError, IndexError):
+                    except KeyError, json.JSONDecodeError, IndexError:
                         continue
                 click.echo()
         except click.ClickException:
             raise
-        except Exception as e:
-            raise click.ClickException(f"Streaming error: {e}")
+        except httpx.HTTPError as e:
+            raise click.ClickException(f"Streaming error: {e}") from e
     else:
         resp = api_request("POST", "/chat/completions", key, json_data=body)
         data = resp.json()
