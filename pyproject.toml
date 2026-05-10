@@ -18,3 +18,12 @@ docs = [
     "sphinx-design>=0.6.0",
     "sphinx-llm>=0.3.0",
 ]
+
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=6.0.0",
+]
+
+[tool.pytest.ini_options]
+addopts = ["--tb=short", "--durations=0"]
+testpaths = ["tests"]

@@ -48,6 +48,8 @@ llm -m fcio-rzob/gpt-oss-120b -s "You are a helpful math tutor" "What is 2+2?"
 - `temperature` (float, 0–2) — sampling temperature
 - `max_tokens` (int) — max tokens in response
 - `top_p` (float, 0–1) — nucleus sampling
+- `tools` — tool definitions forwarded to the API
+- `response_format` — JSON mode and structured output configuration
 
 ## Embedding Models
 

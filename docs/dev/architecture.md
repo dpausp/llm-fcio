@@ -17,6 +17,15 @@ capability:
 All three hooks read from the same model cache. If the cache is empty (no
 `refresh` run yet), nothing registers and the plugin is inert.
 
+## Error Handling
+
+Programmatic errors use two custom exception classes:
+
+- `ModelError(Exception)` — ambiguous or unknown model resolution failures
+- `ApiError(Exception)` — API communication failures (empty response, streaming errors, HTTP status errors)
+
+CLI-user-facing validation errors (missing prompt, path not found, no files, aborted) remain `click.ClickException` since they serve CLI UX, not programmatic error handling.
+
 ## Model Registration
 
 Models are not hardcoded. The plugin fetches available models from the API at
@@ -38,14 +47,28 @@ The plugin generates a `safe_id` by replacing `:` → `-` and `.` → `_`. The
 `llm` model ID is always `fcio-rzob/<safe_id>`, while the API call uses the
 original ID.
 
+### Model Options Forwarding
+
+The `RzobModel.Options` class declares `tools` and `response_format` fields
+via pydantic `Field()`. Both are forwarded in `execute()` to the API request body
+when set — tool calling and JSON mode are functional, not silently ignored.
+
 ## API Communication
 
 All API calls go through `httpx` with Bearer token auth. The key resolution
 chain: `llm` key store → `FCIO_RZOB_API_KEY` env var → error.
 
-Chat completions support SSE streaming via `httpx-sse`. The streaming path
-parses `data: [DONE]` termination and yields content deltas incrementally.
-Non-streaming calls use the same endpoint without the `stream` parameter.
+Chat completions support SSE streaming via `httpx-sse`. The SSE parsing logic
+is encapsulated in `_iter_sse_content(client, url, headers, body) -> Iterator[str]`,
+a shared generator that handles the connection, iteration, JSON parsing, and
+delta extraction. Both `execute()` and `_send_chat_request()` delegate to this
+generator, eliminating duplicated SSE loops. The generator parses `data: [DONE]`
+termination and yields content deltas incrementally. Non-streaming calls use the
+same endpoint without the `stream` parameter.
+
+HTTP status codes use `httpx.codes` named constants (`BAD_REQUEST`, `UNAUTHORIZED`,
+`NOT_FOUND`) instead of raw integers. Status threshold checks use
+`>= httpx.codes.BAD_REQUEST`.
 
 Embedding calls are batched (`batch_size = 100`). Each batch posts to
 `/embeddings` and yields vectors from the response.
@@ -76,6 +99,13 @@ both formats transparently.
 The chunk size and overlap are configurable. The default (30 lines / 5 overlap)
 targets code files; larger chunks suit prose documents.
 
+## Testing
+
+Tests live in `tests/` using pytest. The initial test suite covers three pure
+functions (`_chunk_lines`, `_discover_files`, `_build_chat_body`) without mocking.
+Test configuration is in `[tool.pytest.ini_options]` in `pyproject.toml` with
+coverage reporting via `pytest-cov`.
+
 ## CLI Command Group
 
 All plugin CLI commands live under `llm rzob`, registered as a `click` group.
@@ -83,9 +113,11 @@ The pattern is: each command is a closure inside `register_commands`, capturing
 the `cli` group context. Commands that need the API key call `get_api_key()`
 directly.
 
-The `chat` command supports fuzzy model resolution via `fzf`. When fzf is
-installed, a substring triggers interactive selection. Without fzf, unambiguous
-substrings still resolve. Ambiguous matches produce an error.
+The `chat` command supports fuzzy model resolution via `fzf`. The `fzf` binary is
+resolved via `shutil.which("fzf")` before the subprocess call, with a 10-second
+timeout to prevent hanging. When fzf is installed, a substring triggers interactive
+selection. Without fzf, unambiguous substrings still resolve. Ambiguous matches
+produce an error.
 
 ## Configuration Points
 
@@ -96,6 +128,8 @@ substrings still resolve. Ambiguous matches produce an error.
 | Embedding DB | `~/.llm/embeddings.db` | `llm` managed, used by ingest |
 | Hard excludes | `_HARD_EXCLUDES` in source | Directories never ingested |
 | Model aliases | `_SHORT_CHAT_ALIASES`, `_SHORT_EMBED_ALIASES` | Short names for known models |
+| Ruff config | `[tool.ruff]` in `pyproject.toml` | Lint rules, target Python 3.14 |
+| Test runner | `tests/`, pytest config in `pyproject.toml` | Pure function coverage |
 
 The API base URL and key name are constants (`API_BASE`, `KEY_NAME`).
 No plugin-level config file exists; all configuration flows through `llm`'s
