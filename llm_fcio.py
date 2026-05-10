@@ -1,8 +1,9 @@
 """llm-rzob: Plugin für https://ai.rzob.fcio.net/openai/v1"""
 
 import json
+import shutil
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import click
@@ -24,6 +25,18 @@ from rich.progress import (
 
 API_BASE = "https://ai.rzob.fcio.net/openai/v1"
 KEY_NAME = "fcio-rzob"
+
+
+class ModelError(Exception):
+    """Model resolution errors (ambiguous/unknown model)."""
+
+
+class ApiError(Exception):
+    """API communication errors (empty response, streaming, status)."""
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 # ── API Utilities ──────────────────────────────────────
@@ -62,21 +75,52 @@ def api_request(
             json=json_data,
             params=params,
         )
-        if response.status_code >= 400:
+        if response.status_code >= httpx.codes.BAD_REQUEST:
             err = response.json()
             msg = err.get("detail", err.get("error", {}).get("message", str(err)))
-            raise click.ClickException(f"{response.status_code}: {msg}")
+            raise ApiError(f"{response.status_code}: {msg}", status_code=response.status_code)
         return response
+
+
+def _iter_sse_content(
+    client: httpx.Client,
+    url: str,
+    headers: dict,
+    body: dict,
+) -> Iterator[str]:
+    """Yield content deltas from an SSE streaming response."""
+    with connect_sse(
+        client,
+        "POST",
+        url,
+        headers=headers,
+        json=body,
+        timeout=None,
+    ) as event_source:
+        event_source.response.raise_for_status()
+        for sse in event_source.iter_sse():
+            if sse.data == "[DONE]":
+                continue
+            try:
+                event = json.loads(sse.data)
+                choices = event.get("choices", [])
+                if not choices:
+                    continue
+                delta = choices[0].get("delta", {})
+                if delta.get("content"):
+                    yield delta["content"]
+            except KeyError, json.JSONDecodeError, IndexError:
+                continue
 
 
 # ── Model Cache ─────────────────────────────────────────
 
 
-def _cache_path():
+def _cache_path() -> Path:
     return llm.user_dir() / "rzob_models.json"
 
 
-def _load_models():
+def _load_models() -> list[dict]:
     p = _cache_path()
     if not p.exists():
         return []
@@ -96,28 +140,34 @@ def _resolve_model(model_hint: str, key: str) -> str:
     if model_hint in all_ids:
         return model_hint
 
-    try:
-        result = subprocess.run(
-            ["fzf", "-1", "--query", model_hint, "--no-mouse"],
-            input="\n".join(all_ids),
-            capture_output=True,
-            text=True,
-        )
-        picked = result.stdout.strip()
-        if picked:
-            return picked
-    except FileNotFoundError:
-        # Fallback: substring match without fzf
-        matches = [m for m in all_ids if model_hint.lower() in m.lower()]
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            raise click.ClickException(
-                f"Ambiguous model '{model_hint}': {', '.join(matches)} "
-                "(install fzf for interactive selection)",
-            ) from None
+    fzf_path = shutil.which("fzf")
+    if fzf_path:
+        try:
+            result = subprocess.run(
+                [fzf_path, "-1", "--query", model_hint, "--no-mouse"],
+                input="\n".join(all_ids),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+            picked = result.stdout.strip()
+            if picked:
+                return picked
+        except FileNotFoundError:
+            pass
 
-    raise click.ClickException(
+    # Fallback: substring match without fzf
+    matches = [m for m in all_ids if model_hint.lower() in m.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ModelError(
+            f"Ambiguous model '{model_hint}': {', '.join(matches)} "
+            "(install fzf for interactive selection)",
+        ) from None
+
+    raise ModelError(
         f"Unknown model '{model_hint}'. Available: {', '.join(all_ids)}",
     )
 
@@ -160,14 +210,21 @@ class RzobModel(llm.KeyModel):
             default=None,
         )
 
-    def __init__(self, model_id: str, api_id: str):
+    def __init__(self, model_id: str, api_id: str) -> None:
         self.model_id = model_id  # "fcio-rzob/gpt-oss-20b"
         self.api_id = api_id  # "gpt-oss-20b" für API-Call
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"rzob: {self.api_id}"
 
-    def execute(self, prompt, stream, response, conversation, key) -> Iterator[str]:
+    def execute(
+        self,
+        prompt: llm.Prompt,
+        stream: bool,
+        response: llm.Response,
+        conversation: llm.Conversation | None,
+        key: str,
+    ) -> Iterator[str]:
         messages = []
         if prompt.system:
             messages.append({"role": "system", "content": prompt.system})
@@ -202,6 +259,10 @@ class RzobModel(llm.KeyModel):
             body["max_tokens"] = prompt.options.max_tokens
         if prompt.options.top_p is not None:
             body["top_p"] = prompt.options.top_p
+        if prompt.options.tools is not None:
+            body["tools"] = prompt.options.tools
+        if prompt.options.response_format is not None:
+            body["response_format"] = prompt.options.response_format
 
         headers = {
             "Authorization": f"Bearer {key}",
@@ -211,28 +272,9 @@ class RzobModel(llm.KeyModel):
         if stream:
             body["stream"] = True
             with httpx.Client() as client:
-                with connect_sse(
-                    client,
-                    "POST",
-                    f"{API_BASE}/chat/completions",
-                    headers=headers,
-                    json=body,
-                    timeout=None,
-                ) as es:
-                    es.response.raise_for_status()
-                    for sse in es.iter_sse():
-                        if sse.data == "[DONE]":
-                            continue
-                        try:
-                            event = json.loads(sse.data)
-                            choices = event.get("choices", [])
-                            if not choices:
-                                continue
-                            delta = choices[0].get("delta", {})
-                            if delta.get("content"):
-                                yield delta["content"]
-                        except KeyError, json.JSONDecodeError, IndexError:
-                            continue
+                url = f"{API_BASE}/chat/completions"
+                for content in _iter_sse_content(client, url, headers, body):
+                    yield content
         else:
             with httpx.Client() as client:
                 resp = client.post(
@@ -245,7 +287,7 @@ class RzobModel(llm.KeyModel):
                 data = resp.json()
                 choices = data.get("choices") or []
                 if not choices:
-                    raise click.ClickException(
+                    raise ApiError(
                         "Empty response from API - no choices returned",
                     )
                 msg = choices[0].get("message") or {}
@@ -262,11 +304,11 @@ class RzobEmbeddingModel(llm.EmbeddingModel):
     key_env_var = "FCIO_RZOB_API_KEY"
     batch_size = 100
 
-    def __init__(self, model_id: str, api_id: str):
+    def __init__(self, model_id: str, api_id: str) -> None:
         self.model_id = model_id
         self.api_id = api_id
 
-    def embed_batch(self, items):
+    def embed_batch(self, items: Iterator[str | bytes]) -> Iterator[list[float]]:
         key = self.get_key()
         resp = httpx.post(
             f"{API_BASE}/embeddings",
@@ -299,7 +341,7 @@ _SHORT_EMBED_ALIASES = {
 
 
 @llm.hookimpl
-def register_models(register):
+def register_models(register: Callable) -> None:
     for m in _load_models():
         mid = m["id"]
         safe = m.get("safe_id", mid.replace(":", "-"))
@@ -312,7 +354,7 @@ def register_models(register):
 
 
 @llm.hookimpl
-def register_embedding_models(register):
+def register_embedding_models(register: Callable) -> None:
     embed_keywords = ("embed", "bge", "gemma")
     for m in _load_models():
         mid = m["id"]
@@ -398,16 +440,16 @@ def _chunk_lines(
 
 
 @llm.hookimpl
-def register_commands(cli):
+def register_commands(cli: click.Group) -> None:
 
     @cli.group()
-    def rzob():
+    def rzob() -> None:
         "Commands for the llm-rzob plugin"
 
     # ── refresh ────────────────────────────────────────
 
     @rzob.command()
-    def refresh():
+    def refresh() -> None:
         """Fetch available models from API and cache locally"""
         key = get_api_key()
         resp = api_request("GET", "/models", key)
@@ -430,7 +472,7 @@ def register_commands(cli):
     @rzob.command("models")
     @click.option("--json", "as_json", is_flag=True, help="Output as raw JSON")
     @click.option("--filter", "filt", help="Filter models by name substring")
-    def cmd_models(as_json: bool, filt: str | None):
+    def cmd_models(as_json: bool, filt: str | None) -> None:
         """List available models from the API"""
         key = get_api_key()
         resp = api_request("GET", "/models", key)
@@ -447,9 +489,7 @@ def register_commands(cli):
             for m in models:
                 mid = m.get("id", "unknown")
                 mtype = (
-                    "embed"
-                    if any(k in mid.lower() for k in ("embed", "bge", "gemma"))
-                    else "chat"
+                    "embed" if any(k in mid.lower() for k in ("embed", "bge", "gemma")) else "chat"
                 )
                 click.echo(f"{mtype:>10}  {mid}")
 
@@ -473,7 +513,7 @@ def register_commands(cli):
         stream: bool,
         as_json: bool,
         interactive: bool,
-    ):
+    ) -> None:
         """Test chat completions with a model"""
         key = get_api_key()
         model_id = _resolve_model(model_id, key)
@@ -519,7 +559,7 @@ def register_commands(cli):
         text: tuple[str],
         as_json: bool,
         dimensions: int | None,
-    ):
+    ) -> None:
         """Test embedding generation"""
         key = get_api_key()
 
@@ -546,7 +586,7 @@ def register_commands(cli):
 
     @rzob.command("health")
     @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-    def cmd_health(as_json: bool):
+    def cmd_health(as_json: bool) -> None:
         """Check API health and auth"""
         key = get_api_key()
 
@@ -557,7 +597,7 @@ def register_commands(cli):
             resp = api_request("GET", "/models", key)
             results["auth"] = "✅ valid"
             results["models_count"] = len(resp.json().get("data", []))
-        except click.ClickException as e:
+        except ApiError as e:
             results["auth"] = f"❌ {e}"
             results["models_count"] = None
 
@@ -572,14 +612,14 @@ def register_commands(cli):
         try:
             body = {"model": "test", "messages": [{"role": "user", "content": "."}]}
             resp = api_request("POST", "/chat/completions", key, json_data=body)
-            if resp.status_code == 401:
+            if resp.status_code == httpx.codes.UNAUTHORIZED:
                 results["chat_endpoint"] = "❌ auth failed"
-            elif resp.status_code == 404:
+            elif resp.status_code == httpx.codes.NOT_FOUND:
                 results["chat_endpoint"] = "⚠️  endpoint not found"
             else:
                 results["chat_endpoint"] = f"✅ {resp.status_code}"
-        except click.ClickException as e:
-            if "400" in str(e) and "model" in str(e).lower():
+        except ApiError as e:
+            if e.status_code == httpx.codes.BAD_REQUEST and "model" in str(e).lower():
                 results["chat_endpoint"] = "✅ reachable (model error expected)"
             else:
                 results["chat_endpoint"] = f"❌ {e}"
@@ -598,7 +638,7 @@ def register_commands(cli):
     @click.argument("model_id")
     @click.argument("text", nargs=-1, required=True)
     @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-    def cmd_tokens(model_id: str, text: tuple[str], as_json: bool):
+    def cmd_tokens(model_id: str, text: tuple[str], as_json: bool) -> None:
         """Estimate token count for text (if endpoint supports it)"""
         key = get_api_key()
 
@@ -620,7 +660,7 @@ def register_commands(cli):
                 click.echo(f"Prompt tokens:     {usage.get('prompt_tokens', '?')}")
                 click.echo(f"Completion tokens: {usage.get('completion_tokens', '?')}")
                 click.echo(f"Total:             {usage.get('total_tokens', '?')}")
-        except click.ClickException as e:
+        except ApiError as e:
             click.echo(f"⚠️  Token endpoint not supported: {e}", err=True)
             total_chars = sum(len(t) for t in text)
             click.echo(f"Rough estimate: ~{total_chars // 4} tokens (heuristic)")
@@ -669,7 +709,7 @@ def register_commands(cli):
         chunk_size: int,
         overlap: int,
         skip_confirm: bool,
-    ):
+    ) -> None:
         """Ingest files into an llm embedding collection.
 
         COLLECTION is the collection name. PATHS are directories (recursive
@@ -732,7 +772,7 @@ def register_commands(cli):
                 filename="Starting...",
             )
 
-            def _tracked():
+            def _tracked() -> Iterator[tuple[str, str]]:
                 for name, chunks in file_chunks.items():
                     fname = Path(name).name
                     for cid, text in chunks:
@@ -764,46 +804,29 @@ def _build_chat_body(
     return body
 
 
-def _send_chat_request(key: str, body: dict, stream: bool, as_json: bool):
+def _send_chat_request(key: str, body: dict, stream: bool, as_json: bool) -> None:
     if stream:
         body["stream"] = True
         try:
-            with connect_sse(
-                httpx.Client(),
-                "POST",
-                f"{API_BASE}/chat/completions",
-                headers={
+            with httpx.Client() as client:
+                url = f"{API_BASE}/chat/completions"
+                sse_headers = {
                     "Authorization": f"Bearer {key}",
                     "Content-Type": "application/json",
-                },
-                json=body,
-                timeout=None,
-            ) as event_source:
-                event_source.response.raise_for_status()
-                for sse in event_source.iter_sse():
-                    if sse.data == "[DONE]":
-                        continue
-                    try:
-                        event = json.loads(sse.data)
-                        choices = event.get("choices", [])
-                        if not choices:
-                            continue
-                        delta = choices[0].get("delta", {})
-                        if delta.get("content"):
-                            click.echo(delta["content"], nl=False)
-                    except KeyError, json.JSONDecodeError, IndexError:
-                        continue
-                click.echo()
-        except click.ClickException:
+                }
+                for content in _iter_sse_content(client, url, sse_headers, body):
+                    click.echo(content, nl=False)
+            click.echo()
+        except ApiError:
             raise
         except httpx.HTTPError as e:
-            raise click.ClickException(f"Streaming error: {e}") from e
+            raise ApiError(f"Streaming error: {e}") from e
     else:
         resp = api_request("POST", "/chat/completions", key, json_data=body)
         data = resp.json()
         choices = data.get("choices", [])
         if not choices:
-            raise click.ClickException("Empty response from API - no choices returned")
+            raise ApiError("Empty response from API - no choices returned")
         if as_json:
             click.echo(json.dumps(data, indent=2))
         else:
