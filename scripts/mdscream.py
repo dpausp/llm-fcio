@@ -21,6 +21,7 @@ Finalized blocks are rendered once and never touched again.
 """
 
 import sys
+import time
 from dataclasses import dataclass, field
 from io import StringIO
 
@@ -231,11 +232,13 @@ def _normalize_cr(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 READ_SIZE = 4096
+DEBOUNCE_S = 0.05  # 50ms between active-block re-renders
 
 
 def main() -> None:
     detector = BlockDetector()
     buf = ""
+    last_active_render = 0.0
 
     while True:
         chunk = sys.stdin.read(READ_SIZE)
@@ -253,10 +256,13 @@ def main() -> None:
             for block in finalized:
                 render_finalized(block)
 
-        # Re-render active block
+        # Re-render active block (debounced)
         active = detector.active
         if active.content and any(l.strip() for l in active.content):
-            render_active(active)
+            now = time.monotonic()
+            if now - last_active_render >= DEBOUNCE_S:
+                render_active(active)
+                last_active_render = now
 
     # Feed remaining buffer
     if buf.strip():
