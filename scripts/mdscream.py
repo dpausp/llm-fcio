@@ -17,7 +17,6 @@ rendered with full Rich formatting. The active (incomplete) block is
 buffered until finalized. No ANSI cursor manipulation — just clean output.
 """
 
-import shutil
 import sys
 from dataclasses import dataclass, field
 
@@ -97,9 +96,20 @@ class BlockDetector:
 # Renderer
 # ---------------------------------------------------------------------------
 
+def _detect_width() -> int:
+    """Detect terminal width from stdout/stderr (not stdin, which is piped)."""
+    import os
+    for fd in (1, 2, 0):
+        try:
+            return os.get_terminal_size(fd).columns
+        except OSError:
+            continue
+    return 80
+
+
 _console = Console(
     force_terminal=True,
-    width=shutil.get_terminal_size((120, 40)).columns,
+    width=_detect_width(),
 )
 
 
