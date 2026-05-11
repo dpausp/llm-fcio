@@ -632,6 +632,107 @@ def register_commands(cli: click.Group) -> None:
             for k, v in results.items():
                 click.echo(f"{k:<20} {v}")
 
+    # ── simulate ────────────────────────────────────────
+
+    @rzob.command("simulate")
+    @click.option(
+        "--speed",
+        type=click.Choice(["fast", "normal", "slow"]),
+        default="normal",
+        help="Streaming speed (default: normal)",
+    )
+    @click.option("--seed", type=int, default=42, help="Random seed for reproducibility")
+    def cmd_simulate(speed: str, seed: int) -> None:
+        """Stream a simulated LLM response (for testing mdscream).
+
+        Produces token-by-token markdown output that looks like a real
+        model response. Use it to test markdown renderers:
+
+            llm rzob simulate | uv run scripts/mdscream.py
+        """
+        import random
+        import time
+
+        rng = random.Random(seed)
+
+        speeds = {"fast": (8, 3, 3, 8), "normal": (25, 12, 1, 4), "slow": (60, 25, 1, 2)}
+        delay_ms, jitter_ms, chunk_min, chunk_max = speeds[speed]
+
+        response = (
+            "# Python Decorators\n"
+            "\n"
+            "Decorators are one of Python's most powerful features. They allow you to "
+            "**modify** or *extend* the behavior of callable objects without permanently "
+            "modifying them.\n"
+            "\n"
+            "## Basic Syntax\n"
+            "\n"
+            "A decorator takes a function and returns a modified version:\n"
+            "\n"
+            "```python\n"
+            "def my_decorator(func):\n"
+            "    def wrapper(*args, **kwargs):\n"
+            '        print("Before call")\n'
+            "        result = func(*args, **kwargs)\n"
+            '        print("After call")\n'
+            "        return result\n"
+            "    return wrapper\n"
+            "\n"
+            "@my_decorator\n"
+            "def greet(name):\n"
+            '    print(f"Hello, {name}!")\n'
+            "\n"
+            "greet('World')\n"
+            "```\n"
+            "\n"
+            "## Key Points\n"
+            "\n"
+            "Important things to remember:\n"
+            "\n"
+            "- Decorators accept a function and return a new one\n"
+            "- The `@decorator` syntax is sugar for `func = decorator(func)`\n"
+            "- Use `functools.wraps` to preserve function metadata\n"
+            "- Multiple decorators apply bottom-up\n"
+            "\n"
+            "## Common Use Cases\n"
+            "\n"
+            "| Pattern | Decorator |\n"
+            "|---------|----------|\n"
+            "| Logging | `@log_calls` |\n"
+            "| Caching | `@lru_cache` |\n"
+            "| Auth | `@require_login` |\n"
+            "| Retry | `@retry(n=3)` |\n"
+            "\n"
+            "### Stacking Decorators\n"
+            "\n"
+            "```bash\n"
+            "@decorator_a\n"
+            "@decorator_b\n"
+            "def my_func():\n"
+            "    pass\n"
+            "# Same as: my_func = decorator_a(decorator_b(my_func))\n"
+            "```\n"
+            "\n"
+            "> Decorators are just functions that return functions. "
+            "Once you grasp that, everything else falls into place.\n"
+            "\n"
+            "See [PEP 318](https://peps.python.org/pep-0318/) for the full specification. "
+            "Happy decorating!\n"
+        )
+
+        pos = 0
+        while pos < len(response):
+            chunk_size = rng.randint(chunk_min, chunk_max)
+            chunk = response[pos : pos + chunk_size]
+            pos += chunk_size
+
+            click.echo(chunk, nl=False)
+            # Flush to ensure immediate output in pipes
+            click.get_text_stream("stdout").flush()
+
+            sleep_s = (delay_ms + rng.randint(-jitter_ms, jitter_ms)) / 1000.0
+            time.sleep(max(0.0, sleep_s))
+
     # ── tokens ─────────────────────────────────────────
 
     @rzob.command("tokens")
