@@ -17,6 +17,7 @@ rendered with full Rich formatting. The active (incomplete) block is
 buffered until finalized. No ANSI cursor manipulation — just clean output.
 """
 
+import shutil
 import sys
 from dataclasses import dataclass, field
 
@@ -96,7 +97,10 @@ class BlockDetector:
 # Renderer
 # ---------------------------------------------------------------------------
 
-_console = Console(force_terminal=True)
+_console = Console(
+    force_terminal=True,
+    width=shutil.get_terminal_size((120, 40)).columns,
+)
 
 
 def _render_block(block: Block) -> None:
@@ -115,7 +119,6 @@ def _render_block(block: Block) -> None:
                         theme="monokai",
                         line_numbers=False,
                         word_wrap=False,
-                        background_color="inherit",
                     )
                 )
                 return
