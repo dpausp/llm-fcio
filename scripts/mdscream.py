@@ -16,14 +16,13 @@ CLIs like `llm`:
 Architecture:
     stdin → Buffer → BlockDetector (state machine) → Renderer (Rich) → stdout
 
-Only the last (active) markdown block is re-rendered on new input.
-Finalized blocks are rendered once and never touched again.
+Finalized blocks are rendered with full Rich formatting. The active
+(incomplete) block is printed as plain text and replaced with the
+formatted version once finalized. No ANSI cursor manipulation needed.
 """
 
 import sys
-import time
 from dataclasses import dataclass, field
-from io import StringIO
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -45,11 +44,9 @@ class Block:
 class BlockDetector:
     """State machine that splits streaming input into finalized blocks.
 
-    Only the last top-level block can change. Everything before it is
-    immutable once a new block boundary is seen. We accumulate lines in
-    the "active" block. When we detect that the active block has ended
-    (double newline or closing fence), we finalize it and start a new
-    active block.
+    Only the last top-level block can change. We accumulate lines in the
+    "active" block. When a block boundary is detected (empty line, closing
+    code fence), we finalize it and start a new active block.
     """
 
     def __init__(self) -> None:
@@ -75,7 +72,6 @@ class BlockDetector:
 
         # Code fence opening
         if stripped.startswith("```"):
-            # Finalize pending text block if it has content
             if self._active.content and any(
                 l.strip() for l in self._active.content
             ):
@@ -118,11 +114,10 @@ class BlockDetector:
 # ---------------------------------------------------------------------------
 
 _console = Console(force_terminal=True)
-_active_render_height = 0
 
 
-def _render_block_to_console(con: Console, block: Block) -> None:
-    """Render a block to the given console."""
+def _render_block(block: Block) -> None:
+    """Render a finalized block with full formatting."""
     if block.kind == "code":
         code = "\n".join(block.content)
         if not code.strip():
@@ -130,20 +125,20 @@ def _render_block_to_console(con: Console, block: Block) -> None:
         lang = block.language
         if lang and lang.lower() not in ("", "text", "plain"):
             try:
-                con.print(
+                _console.print(
                     Syntax(
                         code,
                         lang,
                         theme="monokai",
                         line_numbers=False,
                         word_wrap=False,
-                        background_color="default",
+                        background_color="inherit",
                     )
                 )
                 return
             except Exception:
                 pass
-        con.print(Text(code))
+        _console.print(Text(code))
         return
 
     # Text block → Rich Markdown
@@ -151,63 +146,17 @@ def _render_block_to_console(con: Console, block: Block) -> None:
     if not text:
         return
     try:
-        con.print(Markdown(text))
+        _console.print(Markdown(text))
     except Exception:
-        con.print(Text(text))
+        _console.print(Text(text))
 
 
-def _count_rendered_lines(block: Block) -> int:
-    """Render block to a capture buffer and count output lines."""
-    buf = StringIO()
-    con = Console(
-        file=buf,
-        width=_console.width,
-        force_terminal=False,
-        no_color=True,
-        legacy_windows=False,
-    )
-    _render_block_to_console(con, block)
-    output = buf.getvalue()
-    if not output:
-        return 0
-    # Rich appends newlines; count non-empty trailing segments
-    return sum(1 for _ in output.splitlines())
-
-
-def render_finalized(block: Block) -> None:
-    """Render a finalized block (never touched again).
-
-    If the block was already being shown as the active block (cursor is
-    right below it), we just mark it as permanent. If it was never
-    rendered as active (e.g. a block that was finalized immediately),
-    we render it now.
-    """
-    global _active_render_height
-
-    if _active_render_height == 0:
-        # Block was never shown as active — render it now
-        _render_block_to_console(_console, block)
+def _render_active_plain(block: Block) -> None:
+    """Print the active block as plain text (will be replaced when finalized)."""
+    text = "\n".join(block.content)
+    if text.strip():
+        sys.stdout.write(text + "\n")
         sys.stdout.flush()
-    else:
-        # Block is already on screen from render_active — just mark permanent
-        _active_render_height = 0
-
-
-def render_active(block: Block) -> None:
-    """Render the active (in-progress) block, overwriting previous render.
-
-    Uses ANSI cursor movement to move up and clear the previous rendering
-    of this block, then re-renders it. This is the anti-flicker mechanism.
-    """
-    global _active_render_height
-
-    if _active_render_height > 0:
-        sys.stdout.write(f"\033[{_active_render_height}A\033[J")
-        sys.stdout.flush()
-
-    _active_render_height = _count_rendered_lines(block)
-    _render_block_to_console(_console, block)
-    sys.stdout.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -232,13 +181,12 @@ def _normalize_cr(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 READ_SIZE = 4096
-DEBOUNCE_S = 0.05  # 50ms between active-block re-renders
 
 
 def main() -> None:
     detector = BlockDetector()
     buf = ""
-    last_active_render = 0.0
+    active_lines_printed = 0
 
     while True:
         chunk = sys.stdin.read(READ_SIZE)
@@ -254,31 +202,50 @@ def main() -> None:
             finalized = detector.feed_line(line)
 
             for block in finalized:
-                render_finalized(block)
+                # Clear the plain-text active block lines from screen
+                if active_lines_printed > 0:
+                    # Move up and clear
+                    sys.stdout.write(f"\033[{active_lines_printed}A\033[J")
+                    sys.stdout.flush()
+                    active_lines_printed = 0
+                _render_block(block)
 
-        # Re-render active block (debounced)
+        # Print active block as plain text (if new lines arrived)
         active = detector.active
-        if active.content and any(l.strip() for l in active.content):
-            now = time.monotonic()
-            if now - last_active_render >= DEBOUNCE_S:
-                render_active(active)
-                last_active_render = now
+        new_lines = len(active.content) - active_lines_printed
+        if new_lines > 0 and active.content:
+            for line in active.content[active_lines_printed:]:
+                sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+            active_lines_printed = len(active.content)
 
     # Feed remaining buffer
     if buf.strip():
         for line in buf.split("\n"):
             finalized = detector.feed_line(line)
             for block in finalized:
-                render_finalized(block)
+                if active_lines_printed > 0:
+                    sys.stdout.write(f"\033[{active_lines_printed}A\033[J")
+                    sys.stdout.flush()
+                    active_lines_printed = 0
+                _render_block(block)
 
     # Flush remaining
     for block in detector.flush():
-        render_finalized(block)
+        if active_lines_printed > 0:
+            sys.stdout.write(f"\033[{active_lines_printed}A\033[J")
+            sys.stdout.flush()
+            active_lines_printed = 0
+        _render_block(block)
 
     # Final active block
     active = detector.active
     if active.content and any(l.strip() for l in active.content):
-        render_finalized(active)
+        if active_lines_printed > 0:
+            sys.stdout.write(f"\033[{active_lines_printed}A\033[J")
+            sys.stdout.flush()
+            active_lines_printed = 0
+        _render_block(active)
 
 
 if __name__ == "__main__":
