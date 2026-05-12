@@ -131,10 +131,12 @@ def _render_block(block: Block) -> None:
                         word_wrap=False,
                     )
                 )
+                sys.stdout.flush()
                 return
             except Exception:
                 pass
         _console.print(Text(code))
+        sys.stdout.flush()
         return
 
     text = "\n".join(block.content).strip()
@@ -144,6 +146,7 @@ def _render_block(block: Block) -> None:
         _console.print(Markdown(text))
     except Exception:
         _console.print(Text(text))
+    sys.stdout.flush()
 
 
 # ---------------------------------------------------------------------------
