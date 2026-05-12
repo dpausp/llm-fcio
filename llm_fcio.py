@@ -424,10 +424,12 @@ class _StreamingRenderer:
                     self._console.print(
                         Syntax(code, lang, theme="monokai", line_numbers=False, word_wrap=False),
                     )
+                    sys.stdout.flush()
                     return
                 except Exception:
                     pass
             self._console.print(Text(code))
+            sys.stdout.flush()
             return
 
         text = "\n".join(block.content).strip()
@@ -435,8 +437,10 @@ class _StreamingRenderer:
             return
         try:
             self._console.print(Markdown(text))
+            sys.stdout.flush()
         except Exception:
             self._console.print(Text(text))
+            sys.stdout.flush()
 
 
 # ── Model Registration ──────────────────────────────────
