@@ -175,9 +175,10 @@ def main() -> None:
     buf = ""
 
     while True:
-        chunk = sys.stdin.read(READ_SIZE)
-        if not chunk:
+        raw = sys.stdin.buffer.read1(READ_SIZE)
+        if not raw:
             break
+        chunk = raw.decode("utf-8", errors="replace")
 
         chunk = _normalize_cr(chunk)
         buf += chunk
