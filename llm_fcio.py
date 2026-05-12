@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -618,6 +619,11 @@ def register_commands(cli: click.Group) -> None:
     @click.option("--stream/--no-stream", default=True, help="Stream response")
     @click.option("--json", "as_json", is_flag=True, help="Output full JSON response")
     @click.option("-i", "--interactive", is_flag=True, help="Interactive chat mode")
+    @click.option(
+        "--render/--no-render",
+        default=None,
+        help="Rich markdown rendering (default: auto-detect from terminal)",
+    )
     def cmd_chat(
         prompt: tuple[str],
         model_id: str,
@@ -627,10 +633,14 @@ def register_commands(cli: click.Group) -> None:
         stream: bool,
         as_json: bool,
         interactive: bool,
+        render: bool | None,
     ) -> None:
-        """Test chat completions with a model"""
+        """Chat with a model, with optional Rich markdown rendering"""
         key = get_api_key()
         model_id = _resolve_model(model_id, key)
+
+        # Auto-detect: render when stdout is a terminal (not a pipe)
+        do_render = render if render is not None else sys.stdout.isatty()
 
         messages = []
         if system:
@@ -652,14 +662,14 @@ def register_commands(cli: click.Group) -> None:
                     break
 
                 body = _build_chat_body(model_id, messages, temperature, max_tokens)
-                _send_chat_request(key, body, stream, as_json)
+                _send_chat_request(key, body, stream, as_json, render=do_render)
                 messages.append({"role": "assistant", "content": "[...]"})
         else:
             if not prompt_text:
                 raise click.ClickException("Prompt required (or use --interactive)")
             messages.append({"role": "user", "content": prompt_text})
             body = _build_chat_body(model_id, messages, temperature, max_tokens)
-            _send_chat_request(key, body, stream, as_json)
+            _send_chat_request(key, body, stream, as_json, render=do_render)
 
     # ── embed ──────────────────────────────────────────
 
@@ -1026,10 +1036,17 @@ def _build_chat_body(
     return body
 
 
-def _send_chat_request(key: str, body: dict, stream: bool, as_json: bool) -> None:
+def _send_chat_request(
+    key: str,
+    body: dict,
+    stream: bool,
+    as_json: bool,
+    render: bool = False,
+) -> None:
     if stream:
         body["stream"] = True
         try:
+            renderer = _StreamingRenderer() if render else None
             with httpx.Client() as client:
                 url = f"{API_BASE}/chat/completions"
                 sse_headers = {
@@ -1037,8 +1054,14 @@ def _send_chat_request(key: str, body: dict, stream: bool, as_json: bool) -> Non
                     "Content-Type": "application/json",
                 }
                 for content in _iter_sse_content(client, url, sse_headers, body):
-                    click.echo(content, nl=False)
-            click.echo()
+                    if render:
+                        renderer.feed(content)
+                    else:
+                        click.echo(content, nl=False)
+            if render:
+                renderer.flush()
+            else:
+                click.echo()
         except ApiError:
             raise
         except httpx.HTTPError as e:
