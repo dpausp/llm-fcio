@@ -1,9 +1,11 @@
 """llm-rzob: Plugin für https://ai.rzob.fcio.net/openai/v1"""
 
 import json
+import os
 import shutil
 import subprocess
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
@@ -13,6 +15,8 @@ import pathspec
 import sqlite_utils
 from httpx_sse import connect_sse
 from pydantic import Field
+from rich.console import Console
+from rich.markdown import Markdown
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -22,6 +26,8 @@ from rich.progress import (
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
+from rich.syntax import Syntax
+from rich.text import Text
 
 API_BASE = "https://ai.rzob.fcio.net/openai/v1"
 KEY_NAME = "fcio-rzob"
@@ -322,6 +328,114 @@ class RzobEmbeddingModel(llm.EmbeddingModel):
         resp.raise_for_status()
         for entry in resp.json()["data"]:
             yield entry["embedding"]
+
+
+# ── Streaming Markdown Renderer ─────────────────────────
+
+
+@dataclass(slots=True)
+class _Block:
+    kind: str  # "text" | "code"
+    content: list[str] = field(default_factory=list)
+    language: str | None = None
+
+
+class _StreamingRenderer:
+    """Accumulate streaming markdown, render finalized blocks with Rich.
+
+    Feeds chunks (arbitrary byte boundaries) into a line buffer,
+    detects block boundaries (blank lines, code fences), and renders
+    each finalized block immediately via Rich Console — no pipe, no buffering.
+    """
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._active = _Block(kind="text")
+        self._in_code_fence = False
+        self._console = Console(force_terminal=True)
+
+    def feed(self, chunk: str) -> None:
+        """Feed a chunk of markdown. Renders any finalized blocks."""
+        self._buf += chunk
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            for block in self._detect(line):
+                self._render(block)
+
+    def flush(self) -> None:
+        """Flush remaining buffer + active block."""
+        if self._buf.strip():
+            for block in self._detect(self._buf):
+                self._render(block)
+            self._buf = ""
+        for block in self._finalize_active():
+            self._render(block)
+
+    # -- block detection --
+
+    def _detect(self, line: str) -> list[_Block]:
+        stripped = line.rstrip("\r")
+        ready: list[_Block] = []
+
+        if self._in_code_fence:
+            if stripped.strip() == "```":
+                ready.append(self._active)
+                self._active = _Block(kind="text")
+                self._in_code_fence = False
+            else:
+                self._active.content.append(stripped)
+            return ready
+
+        if stripped.startswith("```"):
+            if self._active.content and any(l.strip() for l in self._active.content):
+                ready.append(self._active)
+            lang = stripped[3:].strip() or None
+            self._active = _Block(kind="code", language=lang)
+            self._in_code_fence = True
+            return ready
+
+        if stripped == "" and self._active.content:
+            if any(l.strip() for l in self._active.content):
+                ready.append(self._active)
+                self._active = _Block(kind="text")
+            return ready
+
+        self._active.content.append(stripped)
+        return ready
+
+    def _finalize_active(self) -> list[_Block]:
+        if self._active.content and any(l.strip() for l in self._active.content):
+            block = self._active
+            self._active = _Block(kind="text")
+            return [block]
+        return []
+
+    # -- rendering --
+
+    def _render(self, block: _Block) -> None:
+        if block.kind == "code":
+            code = "\n".join(block.content)
+            if not code.strip():
+                return
+            lang = block.language
+            if lang and lang.lower() not in ("", "text", "plain"):
+                try:
+                    self._console.print(
+                        Syntax(code, lang, theme="monokai", line_numbers=False, word_wrap=False),
+                    )
+                    return
+                except Exception:
+                    pass
+            self._console.print(Text(code))
+            return
+
+        text = "\n".join(block.content).strip()
+        if not text:
+            return
+        try:
+            self._console.print(Markdown(text))
+        except Exception:
+            self._console.print(Text(text))
 
 
 # ── Model Registration ──────────────────────────────────
@@ -642,13 +756,13 @@ def register_commands(cli: click.Group) -> None:
         help="Streaming speed (default: normal)",
     )
     @click.option("--seed", type=int, default=42, help="Random seed for reproducibility")
-    def cmd_simulate(speed: str, seed: int) -> None:
-        """Stream a simulated LLM response (for testing mdscream).
+    @click.option("--raw", is_flag=True, help="Output raw markdown (no Rich rendering)")
+    def cmd_simulate(speed: str, seed: int, raw: bool) -> None:
+        """Stream a simulated LLM response with Rich markdown rendering.
 
         Produces token-by-token markdown output that looks like a real
-        model response. Use it to test markdown renderers:
-
-            llm rzob simulate | uv run scripts/mdscream.py
+        model response. Blocks are rendered as they finalize (paragraph,
+        code fence, list). Use --raw for unformatted pipe output.
         """
         import random
         import time
@@ -721,17 +835,24 @@ def register_commands(cli: click.Group) -> None:
         )
 
         pos = 0
+        renderer = _StreamingRenderer() if not raw else None
+
         while pos < len(response):
             chunk_size = rng.randint(chunk_min, chunk_max)
             chunk = response[pos : pos + chunk_size]
             pos += chunk_size
 
-            click.echo(chunk, nl=False)
-            # Flush to ensure immediate output in pipes
-            click.get_text_stream("stdout").flush()
+            if raw:
+                click.echo(chunk, nl=False)
+                click.get_text_stream("stdout").flush()
+            else:
+                renderer.feed(chunk)
 
             sleep_s = (delay_ms + rng.randint(-jitter_ms, jitter_ms)) / 1000.0
             time.sleep(max(0.0, sleep_s))
+
+        if not raw:
+            renderer.flush()
 
     # ── tokens ─────────────────────────────────────────
 
