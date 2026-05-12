@@ -620,7 +620,7 @@ def register_commands(cli: click.Group) -> None:
     @click.option("--json", "as_json", is_flag=True, help="Output full JSON response")
     @click.option("-i", "--interactive", is_flag=True, help="Interactive chat mode")
     @click.option(
-        "--render/--no-render",
+        "--markdown/--no-markdown",
         default=None,
         help="Rich markdown rendering (default: auto-detect from terminal)",
     )
@@ -633,14 +633,14 @@ def register_commands(cli: click.Group) -> None:
         stream: bool,
         as_json: bool,
         interactive: bool,
-        render: bool | None,
+        markdown: bool | None,
     ) -> None:
         """Chat with a model, with optional Rich markdown rendering"""
         key = get_api_key()
         model_id = _resolve_model(model_id, key)
 
         # Auto-detect: render when stdout is a terminal (not a pipe)
-        do_render = render if render is not None else sys.stdout.isatty()
+        do_render = markdown if markdown is not None else sys.stdout.isatty()
 
         messages = []
         if system:
