@@ -394,6 +394,7 @@ dependencies = [
     { name = "httpx-sse" },
     { name = "llm" },
     { name = "pathspec" },
+    { name = "pygments" },
     { name = "rich" },
     { name = "sqlite-utils" },
 ]
@@ -420,6 +421,7 @@ requires-dist = [
     { name = "httpx-sse" },
     { name = "llm" },
     { name = "pathspec" },
+    { name = "pygments" },
     { name = "rich" },
     { name = "sqlite-utils" },
 ]

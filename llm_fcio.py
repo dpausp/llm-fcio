@@ -1,7 +1,6 @@
-"""llm-rzob: Plugin für https://ai.rzob.fcio.net/openai/v1"""
+"""llm-fcio: Plugin für FCIO AI platform (multi-location)"""
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -30,8 +29,25 @@ from rich.progress import (
 from rich.syntax import Syntax
 from rich.text import Text
 
-API_BASE = "https://ai.rzob.fcio.net/openai/v1"
-KEY_NAME = "fcio-rzob"
+# ── Location Configuration ──────────────────────────────
+
+
+@dataclass(slots=True, frozen=True)
+class Location:
+    name: str
+    api_base: str
+    key_name: str
+    env_var: str
+
+
+LOCATIONS: dict[str, Location] = {
+    "rzob": Location(
+        "rzob", "https://ai.rzob.fcio.net/openai/v1", "fcio-rzob", "FCIO_RZOB_API_KEY"
+    ),
+    "dev": Location("dev", "https://ai.dev.fcio.net/openai/v1", "fcio-dev", "FCIO_DEV_API_KEY"),
+    "whq": Location("whq", "https://ai.whq.fcio.net/openai/v1", "fcio-whq", "FCIO_WHQ_API_KEY"),
+}
+DEFAULT_LOCATION = "rzob"
 
 
 class ModelError(Exception):
@@ -49,12 +65,12 @@ class ApiError(Exception):
 # ── API Utilities ──────────────────────────────────────
 
 
-def get_api_key() -> str:
+def get_api_key(loc: Location) -> str:
     """Holt den API-Key aus llm key store oder env"""
-    key = llm.get_key("", KEY_NAME, "FCIO_RZOB_API_KEY")
+    key = llm.get_key("", loc.key_name, loc.env_var)
     if not key:
         raise click.ClickException(
-            f"API key not found. Set with: llm keys set {KEY_NAME}",
+            f"API key not found. Set with: llm keys set {loc.key_name}",
         )
     return key
 
@@ -63,11 +79,12 @@ def api_request(
     method: str,
     path: str,
     key: str,
+    api_base: str,
     json_data: dict | None = None,
     params: dict | None = None,
 ) -> httpx.Response:
     """Generic API request helper mit Auth + Error-Handling"""
-    url = f"{API_BASE}/{path.lstrip('/')}"
+    url = f"{api_base}/{path.lstrip('/')}"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -123,12 +140,17 @@ def _iter_sse_content(
 # ── Model Cache ─────────────────────────────────────────
 
 
-def _cache_path() -> Path:
-    return llm.user_dir() / "rzob_models.json"
+def _cache_path(loc_name: str = DEFAULT_LOCATION) -> Path:
+    new_path = llm.user_dir() / f"fcio_models_{loc_name}.json"
+    if not new_path.exists() and loc_name == DEFAULT_LOCATION:
+        old_path = llm.user_dir() / "rzob_models.json"
+        if old_path.exists():
+            old_path.rename(new_path)
+    return new_path
 
 
-def _load_models() -> list[dict]:
-    p = _cache_path()
+def _load_models(loc_name: str = DEFAULT_LOCATION) -> list[dict]:
+    p = _cache_path(loc_name)
     if not p.exists():
         return []
     data = json.loads(p.read_text())
@@ -139,9 +161,9 @@ def _load_models() -> list[dict]:
     return data
 
 
-def _resolve_model(model_hint: str, key: str) -> str:
+def _resolve_model(model_hint: str, key: str, api_base: str) -> str:
     """Resolve fuzzy model name to exact model ID via fzf."""
-    resp = api_request("GET", "/models", key)
+    resp = api_request("GET", "/models", key, api_base)
     all_ids = [m["id"] for m in resp.json().get("data", [])]
 
     if model_hint in all_ids:
@@ -183,8 +205,6 @@ def _resolve_model(model_hint: str, key: str) -> str:
 
 
 class RzobModel(llm.KeyModel):
-    needs_key = KEY_NAME
-    key_env_var = "FCIO_RZOB_API_KEY"
     can_stream = True
     attachment_types = {"text/plain"}
 
@@ -217,12 +237,15 @@ class RzobModel(llm.KeyModel):
             default=None,
         )
 
-    def __init__(self, model_id: str, api_id: str) -> None:
-        self.model_id = model_id  # "fcio-rzob/gpt-oss-20b"
-        self.api_id = api_id  # "gpt-oss-20b" für API-Call
+    def __init__(self, model_id: str, api_id: str, location: Location) -> None:
+        self.model_id = model_id
+        self.api_id = api_id
+        self.needs_key = location.key_name
+        self.key_env_var = location.env_var
+        self._location = location
 
     def __str__(self) -> str:
-        return f"rzob: {self.api_id}"
+        return f"{self._location.name}: {self.api_id}"
 
     def execute(
         self,
@@ -276,16 +299,17 @@ class RzobModel(llm.KeyModel):
             "Content-Type": "application/json",
         }
 
+        api_base = self._location.api_base
         if stream:
             body["stream"] = True
             with httpx.Client() as client:
-                url = f"{API_BASE}/chat/completions"
+                url = f"{api_base}/chat/completions"
                 for content in _iter_sse_content(client, url, headers, body):
                     yield content
         else:
             with httpx.Client() as client:
                 resp = client.post(
-                    f"{API_BASE}/chat/completions",
+                    f"{api_base}/chat/completions",
                     headers=headers,
                     json=body,
                     timeout=None,
@@ -307,18 +331,20 @@ class RzobModel(llm.KeyModel):
 
 
 class RzobEmbeddingModel(llm.EmbeddingModel):
-    needs_key = KEY_NAME
-    key_env_var = "FCIO_RZOB_API_KEY"
     batch_size = 100
 
-    def __init__(self, model_id: str, api_id: str) -> None:
+    def __init__(self, model_id: str, api_id: str, location: Location) -> None:
         self.model_id = model_id
         self.api_id = api_id
+        self.needs_key = location.key_name
+        self.key_env_var = location.env_var
+        self._location = location
 
     def embed_batch(self, items: Iterator[str | bytes]) -> Iterator[list[float]]:
         key = self.get_key()
+        api_base = self._location.api_base
         resp = httpx.post(
-            f"{API_BASE}/embeddings",
+            f"{api_base}/embeddings",
             headers={
                 "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json",
@@ -388,7 +414,7 @@ class _StreamingRenderer:
             return ready
 
         if stripped.startswith("```"):
-            if self._active.content and any(l.strip() for l in self._active.content):
+            if self._active.content and any(line.strip() for line in self._active.content):
                 ready.append(self._active)
             lang = stripped[3:].strip() or None
             self._active = _Block(kind="code", language=lang)
@@ -396,7 +422,7 @@ class _StreamingRenderer:
             return ready
 
         if stripped == "" and self._active.content:
-            if any(l.strip() for l in self._active.content):
+            if any(line.strip() for line in self._active.content):
                 ready.append(self._active)
                 self._active = _Block(kind="text")
             return ready
@@ -405,7 +431,7 @@ class _StreamingRenderer:
         return ready
 
     def _finalize_active(self) -> list[_Block]:
-        if self._active.content and any(l.strip() for l in self._active.content):
+        if self._active.content and any(line.strip() for line in self._active.content):
             block = self._active
             self._active = _Block(kind="text")
             return [block]
@@ -426,7 +452,7 @@ class _StreamingRenderer:
                     )
                     sys.stdout.flush()
                     return
-                except Exception:
+                except Exception:  # noqa: BLE001
                     pass
             self._console.print(Text(code))
             sys.stdout.flush()
@@ -438,7 +464,7 @@ class _StreamingRenderer:
         try:
             self._console.print(Markdown(text))
             sys.stdout.flush()
-        except Exception:
+        except Exception:  # noqa: BLE001
             self._console.print(Text(text))
             sys.stdout.flush()
 
@@ -449,7 +475,6 @@ class _StreamingRenderer:
 _SHORT_CHAT_ALIASES = {
     "gpt-oss:20b": "20b",
     "gpt-oss:120b": "120b",
-    "mistral-small3.2:latest": "mistral",
 }
 
 _SHORT_EMBED_ALIASES = {
@@ -461,31 +486,33 @@ _SHORT_EMBED_ALIASES = {
 
 @llm.hookimpl
 def register_models(register: Callable) -> None:
-    for m in _load_models():
-        mid = m["id"]
-        safe = m.get("safe_id", mid.replace(":", "-"))
-        short = _SHORT_CHAT_ALIASES.get(mid)
-        aliases = [safe] + ([short] if short else [])
-        register(
-            RzobModel(f"fcio-rzob/{safe}", mid),
-            aliases=aliases,
-        )
+    for loc_name, loc in LOCATIONS.items():
+        for m in _load_models(loc_name):
+            mid = m["id"]
+            safe = m.get("safe_id", mid.replace(":", "-"))
+            short = _SHORT_CHAT_ALIASES.get(mid) if loc_name == "rzob" else None
+            aliases = [safe] + ([short] if short else [])
+            register(
+                RzobModel(f"fcio-{loc_name}/{safe}", mid, loc),
+                aliases=aliases,
+            )
 
 
 @llm.hookimpl
 def register_embedding_models(register: Callable) -> None:
     embed_keywords = ("embed", "bge", "gemma")
-    for m in _load_models():
-        mid = m["id"]
-        if not any(k in mid.lower() for k in embed_keywords):
-            continue
-        safe = m.get("safe_id", mid.replace(":", "-"))
-        short = _SHORT_EMBED_ALIASES.get(mid)
-        aliases = [safe] + ([short] if short else [])
-        register(
-            RzobEmbeddingModel(f"fcio-rzob/{safe}", mid),
-            aliases=aliases,
-        )
+    for loc_name, loc in LOCATIONS.items():
+        for m in _load_models(loc_name):
+            mid = m["id"]
+            if not any(k in mid.lower() for k in embed_keywords):
+                continue
+            safe = m.get("safe_id", mid.replace(":", "-"))
+            short = _SHORT_EMBED_ALIASES.get(mid) if loc_name == "rzob" else None
+            aliases = [safe] + ([short] if short else [])
+            register(
+                RzobEmbeddingModel(f"fcio-{loc_name}/{safe}", mid, loc),
+                aliases=aliases,
+            )
 
 
 # ── Ingest Helpers ──────────────────────────────────────
@@ -562,16 +589,29 @@ def _chunk_lines(
 def register_commands(cli: click.Group) -> None:
 
     @cli.group()
-    def rzob() -> None:
-        "Commands for the llm-rzob plugin"
+    @click.option(
+        "-l",
+        "--location",
+        "loc_name",
+        default=DEFAULT_LOCATION,
+        type=click.Choice(list(LOCATIONS.keys())),
+        help="FCIO location (default: rzob)",
+    )
+    @click.pass_context
+    def fcio(ctx: click.Context, loc_name: str) -> None:
+        "Commands for the FCIO AI platform"
+        ctx.ensure_object(dict)
+        ctx.obj["location"] = LOCATIONS[loc_name]
 
     # ── refresh ────────────────────────────────────────
 
-    @rzob.command()
-    def refresh() -> None:
+    @fcio.command()
+    @click.pass_context
+    def refresh(ctx: click.Context) -> None:
         """Fetch available models from API and cache locally"""
-        key = get_api_key()
-        resp = api_request("GET", "/models", key)
+        loc: Location = ctx.obj["location"]
+        key = get_api_key(loc)
+        resp = api_request("GET", "/models", key, loc.api_base)
         raw = resp.json()
         data = raw.get("data", raw if isinstance(raw, list) else [])
         models = []
@@ -583,18 +623,20 @@ def register_commands(cli: click.Group) -> None:
                     "safe_id": mid.replace(":", "-").replace(".", "_"),
                 },
             )
-        _cache_path().write_text(json.dumps(models, indent=2))
-        click.echo(f"Cached {len(models)} models", err=True)
+        _cache_path(loc.name).write_text(json.dumps(models, indent=2))
+        click.echo(f"Cached {len(models)} models for {loc.name}", err=True)
 
     # ── models ─────────────────────────────────────────
 
-    @rzob.command("models")
+    @fcio.command("models")
     @click.option("--json", "as_json", is_flag=True, help="Output as raw JSON")
     @click.option("--filter", "filt", help="Filter models by name substring")
-    def cmd_models(as_json: bool, filt: str | None) -> None:
+    @click.pass_context
+    def cmd_models(ctx: click.Context, as_json: bool, filt: str | None) -> None:
         """List available models from the API"""
-        key = get_api_key()
-        resp = api_request("GET", "/models", key)
+        loc: Location = ctx.obj["location"]
+        key = get_api_key(loc)
+        resp = api_request("GET", "/models", key, loc.api_base)
         models = resp.json().get("data", [])
 
         if filt:
@@ -614,7 +656,7 @@ def register_commands(cli: click.Group) -> None:
 
     # ── chat ───────────────────────────────────────────
 
-    @rzob.command("chat")
+    @fcio.command("chat")
     @click.argument("prompt", nargs=-1, required=False)
     @click.option("-m", "--model", "model_id", default="gpt-oss:20b", help="Model ID")
     @click.option("-s", "--system", help="System prompt")
@@ -628,7 +670,9 @@ def register_commands(cli: click.Group) -> None:
         default=None,
         help="Rich markdown rendering (default: auto-detect from terminal)",
     )
+    @click.pass_context
     def cmd_chat(
+        ctx: click.Context,
         prompt: tuple[str],
         model_id: str,
         system: str | None,
@@ -640,8 +684,9 @@ def register_commands(cli: click.Group) -> None:
         markdown: bool | None,
     ) -> None:
         """Chat with a model, with optional Rich markdown rendering"""
-        key = get_api_key()
-        model_id = _resolve_model(model_id, key)
+        loc: Location = ctx.obj["location"]
+        key = get_api_key(loc)
+        model_id = _resolve_model(model_id, key, loc.api_base)
 
         # Auto-detect: render when stdout is a terminal (not a pipe)
         do_render = markdown if markdown is not None else sys.stdout.isatty()
@@ -666,30 +711,35 @@ def register_commands(cli: click.Group) -> None:
                     break
 
                 body = _build_chat_body(model_id, messages, temperature, max_tokens)
-                _send_chat_request(key, body, stream, as_json, render=do_render)
+                _send_chat_request(
+                    key, body, stream, as_json, render=do_render, api_base=loc.api_base
+                )
                 messages.append({"role": "assistant", "content": "[...]"})
         else:
             if not prompt_text:
                 raise click.ClickException("Prompt required (or use --interactive)")
             messages.append({"role": "user", "content": prompt_text})
             body = _build_chat_body(model_id, messages, temperature, max_tokens)
-            _send_chat_request(key, body, stream, as_json, render=do_render)
+            _send_chat_request(key, body, stream, as_json, render=do_render, api_base=loc.api_base)
 
     # ── embed ──────────────────────────────────────────
 
-    @rzob.command("embed")
+    @fcio.command("embed")
     @click.argument("model_id")
     @click.argument("text", nargs=-1, required=True)
     @click.option("--json", "as_json", is_flag=True, help="Output raw JSON")
     @click.option("-d", "--dimensions", type=int, help="Output dimension")
+    @click.pass_context
     def cmd_embed(
+        ctx: click.Context,
         model_id: str,
         text: tuple[str],
         as_json: bool,
         dimensions: int | None,
     ) -> None:
         """Test embedding generation"""
-        key = get_api_key()
+        loc: Location = ctx.obj["location"]
+        key = get_api_key(loc)
 
         body = {
             "model": model_id,
@@ -698,7 +748,7 @@ def register_commands(cli: click.Group) -> None:
         if dimensions:
             body["dimensions"] = dimensions
 
-        resp = api_request("POST", "/embeddings", key, json_data=body)
+        resp = api_request("POST", "/embeddings", key, loc.api_base, json_data=body)
         data = resp.json()
 
         if as_json:
@@ -712,17 +762,19 @@ def register_commands(cli: click.Group) -> None:
 
     # ── health ─────────────────────────────────────────
 
-    @rzob.command("health")
+    @fcio.command("health")
     @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-    def cmd_health(as_json: bool) -> None:
+    @click.pass_context
+    def cmd_health(ctx: click.Context, as_json: bool) -> None:
         """Check API health and auth"""
-        key = get_api_key()
+        loc: Location = ctx.obj["location"]
+        key = get_api_key(loc)
 
         results = {}
 
         # Auth test via /models
         try:
-            resp = api_request("GET", "/models", key)
+            resp = api_request("GET", "/models", key, loc.api_base)
             results["auth"] = "✅ valid"
             results["models_count"] = len(resp.json().get("data", []))
         except ApiError as e:
@@ -731,7 +783,7 @@ def register_commands(cli: click.Group) -> None:
 
         # Base URL reachable
         try:
-            r = httpx.get(API_BASE.replace("/v1", ""), timeout=5)
+            r = httpx.get(loc.api_base.replace("/v1", ""), timeout=5)
             results["base_url"] = f"✅ {r.status_code}"
         except httpx.HTTPError as e:
             results["base_url"] = f"❌ {e}"
@@ -739,7 +791,7 @@ def register_commands(cli: click.Group) -> None:
         # Chat endpoint smoke test
         try:
             body = {"model": "test", "messages": [{"role": "user", "content": "."}]}
-            resp = api_request("POST", "/chat/completions", key, json_data=body)
+            resp = api_request("POST", "/chat/completions", key, loc.api_base, json_data=body)
             if resp.status_code == httpx.codes.UNAUTHORIZED:
                 results["chat_endpoint"] = "❌ auth failed"
             elif resp.status_code == httpx.codes.NOT_FOUND:
@@ -755,14 +807,14 @@ def register_commands(cli: click.Group) -> None:
         if as_json:
             click.echo(json.dumps(results, indent=2))
         else:
-            click.echo("🔍 FCIO RZOB API Health")
+            click.echo(f"🔍 FCIO {loc.name.upper()} API Health")
             click.echo("-" * 40)
             for k, v in results.items():
                 click.echo(f"{k:<20} {v}")
 
     # ── simulate ────────────────────────────────────────
 
-    @rzob.command("simulate")
+    @fcio.command("simulate")
     @click.option(
         "--speed",
         type=click.Choice(["fast", "normal", "slow"]),
@@ -870,13 +922,15 @@ def register_commands(cli: click.Group) -> None:
 
     # ── tokens ─────────────────────────────────────────
 
-    @rzob.command("tokens")
+    @fcio.command("tokens")
     @click.argument("model_id")
     @click.argument("text", nargs=-1, required=True)
     @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-    def cmd_tokens(model_id: str, text: tuple[str], as_json: bool) -> None:
+    @click.pass_context
+    def cmd_tokens(ctx: click.Context, model_id: str, text: tuple[str], as_json: bool) -> None:
         """Estimate token count for text (if endpoint supports it)"""
-        key = get_api_key()
+        loc: Location = ctx.obj["location"]
+        key = get_api_key(loc)
 
         body = {
             "model": model_id,
@@ -885,7 +939,7 @@ def register_commands(cli: click.Group) -> None:
         }
 
         try:
-            resp = api_request("POST", "/chat/completions", key, json_data=body)
+            resp = api_request("POST", "/chat/completions", key, loc.api_base, json_data=body)
             data = resp.json()
             usage = data.get("usage", {})
 
@@ -903,7 +957,7 @@ def register_commands(cli: click.Group) -> None:
 
     # ── ingest ─────────────────────────────────────────
 
-    @rzob.command("ingest")
+    @fcio.command("ingest")
     @click.argument("collection")
     @click.argument("paths", nargs=-1, required=True)
     @click.option(
@@ -937,7 +991,9 @@ def register_commands(cli: click.Group) -> None:
         is_flag=True,
         help="Skip confirmation preview",
     )
+    @click.pass_context
     def cmd_ingest(
+        ctx: click.Context,
         collection: str,
         paths: tuple[str, ...],
         glob_pattern: str,
@@ -953,10 +1009,10 @@ def register_commands(cli: click.Group) -> None:
 
         \b
         Examples:
-          llm rzob ingest mydocs ./docs/
-          llm rzob ingest mydocs ./docs/ --glob '*.py'
-          llm rzob ingest mydocs file1.md file2.md
-          llm rzob ingest mydocs ./src/ -m bge --chunk-size 50 --overlap 10
+          llm fcio ingest mydocs ./docs/
+          llm fcio ingest mydocs ./docs/ --glob '*.py'
+          llm fcio ingest mydocs file1.md file2.md
+          llm fcio ingest mydocs ./src/ -m bge --chunk-size 50 --overlap 10
         """
         resolved_paths = tuple(Path(p) for p in paths)
         files = _discover_files(resolved_paths, glob_pattern)
@@ -1046,13 +1102,14 @@ def _send_chat_request(
     stream: bool,
     as_json: bool,
     render: bool = False,
+    api_base: str = "",
 ) -> None:
     if stream:
         body["stream"] = True
         try:
             renderer = _StreamingRenderer() if render else None
             with httpx.Client() as client:
-                url = f"{API_BASE}/chat/completions"
+                url = f"{api_base}/chat/completions"
                 sse_headers = {
                     "Authorization": f"Bearer {key}",
                     "Content-Type": "application/json",
@@ -1071,7 +1128,7 @@ def _send_chat_request(
         except httpx.HTTPError as e:
             raise ApiError(f"Streaming error: {e}") from e
     else:
-        resp = api_request("POST", "/chat/completions", key, json_data=body)
+        resp = api_request("POST", "/chat/completions", key, api_base, json_data=body)
         data = resp.json()
         choices = data.get("choices", [])
         if not choices:
