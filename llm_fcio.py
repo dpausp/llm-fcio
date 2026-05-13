@@ -725,15 +725,21 @@ def register_commands(cli: click.Group) -> None:
     # ── embed ──────────────────────────────────────────
 
     @fcio.command("embed")
-    @click.argument("model_id")
     @click.argument("text", nargs=-1, required=True)
+    @click.option(
+        "-m",
+        "--model",
+        "model_id",
+        default="bge-m3-567m",
+        help="Embedding model (default: bge-m3-567m)",
+    )
     @click.option("--json", "as_json", is_flag=True, help="Output raw JSON")
     @click.option("-d", "--dimensions", type=int, help="Output dimension")
     @click.pass_context
     def cmd_embed(
         ctx: click.Context,
-        model_id: str,
         text: tuple[str],
+        model_id: str,
         as_json: bool,
         dimensions: int | None,
     ) -> None:
