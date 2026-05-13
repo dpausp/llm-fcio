@@ -126,6 +126,12 @@ For simple one-file-one-embedding use cases, `llm embed-multi --files` still wor
 
 ## CLI Commands
 
+### Markdown Rendering
+
+`llm rzob chat` renders markdown responses with syntax highlighting, headings, tables, and formatting:
+
+![llm rzob chat markdown rendering](chat-screenshot.svg)
+
 The plugin adds the `llm rzob` command group:
 
 ```bash
