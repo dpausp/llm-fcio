@@ -923,11 +923,11 @@ def register_commands(cli: click.Group) -> None:
     # ── tokens ─────────────────────────────────────────
 
     @fcio.command("tokens")
-    @click.argument("model_id")
     @click.argument("text", nargs=-1, required=True)
+    @click.option("-m", "--model", "model_id", default="gpt-oss:20b", help="Model ID")
     @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
     @click.pass_context
-    def cmd_tokens(ctx: click.Context, model_id: str, text: tuple[str], as_json: bool) -> None:
+    def cmd_tokens(ctx: click.Context, text: tuple[str], model_id: str, as_json: bool) -> None:
         """Estimate token count for text (if endpoint supports it)"""
         loc: Location = ctx.obj["location"]
         key = get_api_key(loc)
