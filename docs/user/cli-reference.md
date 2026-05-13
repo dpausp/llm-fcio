@@ -41,7 +41,7 @@ llm rzob models --json
 
 ## llm rzob chat
 
-Send a prompt to a chat model. Supports one-shot, interactive, streaming, and system prompts.
+Send a prompt to a chat model. Supports one-shot, interactive, streaming, system prompts, and Rich markdown rendering.
 
 ```bash
 # One-shot (default model: gpt-oss:20b)
@@ -58,6 +58,9 @@ llm rzob chat -i
 
 # Non-streaming with JSON output
 llm rzob chat --no-stream --json "Hello"
+
+# Markdown rendering (auto-detected in terminal)
+llm rzob chat "Explain decorators"
 ```
 
 **Model name resolution:** Pass a substring instead of the full ID. If you have [fzf](https://github.com/junegunn/fzf) installed, ambiguous matches open an interactive picker. Without fzf, unambiguous substrings still resolve. Ambiguous substrings without fzf produce an error.
@@ -76,6 +79,9 @@ llm rzob chat --no-stream --json "Hello"
 
 `--stream / --no-stream`
 : Stream the response token by token, or wait for the full response (default: stream).
+
+`--markdown / --no-markdown`
+: Render markdown responses with Rich formatting (syntax highlighting, headings, bold, code blocks). Defaults to auto-detect: enabled when stdout is a terminal, disabled when piped. Use `--no-markdown` to force raw output in a terminal, or `--markdown` to force rendering when redirecting.
 
 `--json`
 : Output the full API response as JSON instead of plain text.

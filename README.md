@@ -134,10 +134,11 @@ llm rzob models               # List all models with type (chat/embed)
 llm rzob models --filter oss  # Filter models by name
 llm rzob models --json        # Raw JSON output
 
-llm rzob chat "Hello"         # Quick chat (default: gpt-oss:20b)
+llm rzob chat "Hello"         # Quick chat with Rich markdown rendering
 llm rzob chat -m 120b "Hi"   # Use specific model
 llm rzob chat -i              # Interactive chat mode
 llm rzob chat -s "Be terse" "Explain DNS"
+llm rzob chat --no-markdown "Hello"  # Raw output (no formatting)
 
 llm rzob embed bge "some text"            # Test embedding
 llm rzob embed bge "text1" "text2" --json # Multiple texts, raw JSON
