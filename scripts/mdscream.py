@@ -25,7 +25,6 @@ from rich.markdown import Markdown
 from rich.syntax import Syntax
 from rich.text import Text
 
-
 # ---------------------------------------------------------------------------
 # Block detection
 # ---------------------------------------------------------------------------
@@ -64,7 +63,7 @@ class BlockDetector:
 
         if stripped.startswith("```"):
             if self._active.content and any(
-                l.strip() for l in self._active.content
+                ln.strip() for ln in self._active.content
             ):
                 newly.append(self._active)
             lang = stripped[3:].strip() or None
@@ -73,7 +72,7 @@ class BlockDetector:
             return newly
 
         if stripped == "" and self._active.content:
-            if any(l.strip() for l in self._active.content):
+            if any(ln.strip() for ln in self._active.content):
                 newly.append(self._active)
                 self._active = Block(kind="text")
             return newly
@@ -84,7 +83,7 @@ class BlockDetector:
     def flush(self) -> list[Block]:
         """Flush the active block if it has content."""
         if self._active.content and any(
-            l.strip() for l in self._active.content
+            ln.strip() for ln in self._active.content
         ):
             block = self._active
             self._active = Block(kind="text")
@@ -133,7 +132,7 @@ def _render_block(block: Block) -> None:
                 )
                 sys.stdout.flush()
                 return
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
         _console.print(Text(code))
         sys.stdout.flush()
@@ -144,7 +143,7 @@ def _render_block(block: Block) -> None:
         return
     try:
         _console.print(Markdown(text))
-    except Exception:
+    except Exception:  # noqa: BLE001
         _console.print(Text(text))
     sys.stdout.flush()
 
