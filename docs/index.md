@@ -1,6 +1,6 @@
 # llm-fcio
 
-`llm` CLI plugin for the FCIO RZOB API (OpenAI-compatible endpoint).
+`llm` CLI plugin for the FCIO AI platform — OpenAI-compatible chat and embedding endpoints.
 
 ```{toctree}
 :maxdepth: 2

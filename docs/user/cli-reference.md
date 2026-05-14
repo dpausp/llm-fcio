@@ -1,168 +1,170 @@
 # CLI Reference
 
-All commands are under `llm rzob`. Prerequisites: `llm` installed, API key set via `llm keys set fcio-rzob` or the `FCIO_RZOB_API_KEY` environment variable.
+All commands live under `llm fcio`. Select a location with `-l`/`--location` (default: `rzob`).
+
+Prerequisites: `llm` installed, API key set via `llm keys set fcio-rzob` or the `FCIO_RZOB_API_KEY` environment variable.
 
 ---
 
-## llm rzob refresh
+## llm fcio refresh
 
-Fetch available models from the API and cache them locally. Model registration and most other commands depend on this cache.
+Fetches models from the API and caches them locally. Most other commands depend on this cache.
 
 ```bash
-llm rzob refresh
+llm fcio refresh
 ```
 
-Run after first install and when new models may have been added to the API. The cache lives in your llm user directory and persists until you refresh again.
+Run after first install and when new models appear. The cache lives at `~/.llm/fcio_models_{location}.json` and persists until you refresh again.
 
 ---
 
-## llm rzob models
+## llm fcio models
 
-List all models available on the API with their type (chat or embed).
+Lists all available models with their type (chat or embed).
 
 ```bash
 # List everything
-llm rzob models
+llm fcio models
 
 # Filter by name substring
-llm rzob models --filter oss
+llm fcio models --filter oss
 
 # Raw JSON output
-llm rzob models --json
+llm fcio models --json
 ```
 
 `--filter <substring>`
-: Show only models whose ID contains the substring (case-insensitive).
+: Shows only models whose ID contains the substring (case-insensitive).
 
 `--json`
-: Output raw JSON from the API.
+: Dumps the raw API response as JSON.
 
 ---
 
-## llm rzob chat
+## llm fcio chat
 
-Send a prompt to a chat model. Supports one-shot, interactive, streaming, system prompts, and Rich markdown rendering.
+Sends a prompt to a chat model with optional Rich markdown rendering. Supports one-shot, interactive, streaming, and system prompts.
 
 ```bash
 # One-shot (default model: gpt-oss:20b)
-llm rzob chat "What is 2+2?"
+llm fcio chat "What is 2+2?"
 
 # Specific model
-llm rzob chat -m 120b "Explain DNS"
+llm fcio chat -m 120b "Explain DNS"
 
 # System prompt
-llm rzob chat -s "You are a terse technical assistant" "Explain DNS"
+llm fcio chat -s "You are a terse technical assistant" "Explain DNS"
 
 # Interactive conversation
-llm rzob chat -i
+llm fcio chat -i
 
 # Non-streaming with JSON output
-llm rzob chat --no-stream --json "Hello"
-
-# Markdown rendering (auto-detected in terminal)
-llm rzob chat "Explain decorators"
+llm fcio chat --no-stream --json "Hello"
 ```
 
-**Model name resolution:** Pass a substring instead of the full ID. If you have [fzf](https://github.com/junegunn/fzf) installed, ambiguous matches open an interactive picker. Without fzf, unambiguous substrings still resolve. Ambiguous substrings without fzf produce an error.
+**Model name resolution:** Pass a substring instead of the full ID. With [fzf](https://github.com/junegunn/fzf) installed, ambiguous matches open an interactive picker. Without fzf, unambiguous substrings still resolve; ambiguous ones produce an error.
 
 `-m, --model <id>`
-: Model to use. Accepts fuzzy names (default: `gpt-oss:20b`).
+: Selects the model. Accepts fuzzy names (default: `gpt-oss:20b`).
 
 `-s, --system <prompt>`
-: Set a system prompt that shapes the model's behavior.
+: Sets a system prompt that shapes the model's behavior for the entire conversation.
 
 `-t, --temperature <float>`
-: Sampling temperature (default: 0.7). Higher values produce more varied output.
+: Controls output randomness (default: 0.7). Higher values produce more varied responses.
 
 `--max-tokens <int>`
-: Cap the response length in tokens.
+: Caps the response at this many tokens.
 
 `--stream / --no-stream`
-: Stream the response token by token, or wait for the full response (default: stream).
+: Streams the response token by token, or waits for the full response before printing (default: stream).
 
 `--markdown / --no-markdown`
-: Render markdown responses with Rich formatting (syntax highlighting, headings, bold, code blocks). Defaults to auto-detect: enabled when stdout is a terminal, disabled when piped. Use `--no-markdown` to force raw output in a terminal, or `--markdown` to force rendering when redirecting.
+: Renders markdown with Rich formatting (syntax highlighting, headings, code blocks). Auto-detects terminal vs pipe. Use `--no-markdown` for raw output in a terminal, `--markdown` to force rendering when piping.
 
 `--json`
-: Output the full API response as JSON instead of plain text.
+: Outputs the full API response as JSON instead of rendered text.
 
 `-i, --interactive`
-: Start a multi-turn conversation. Press Ctrl+D to exit.
+: Starts a multi-turn conversation. Press Ctrl+D to exit.
 
-**When things go wrong:** Without a prompt and without `--interactive`, the command fails with an error. If the model name matches multiple models and fzf is not installed, you get an ambiguity error listing the matches.
+**Failure modes:** Without a prompt and without `--interactive`, the command fails. If the model name matches multiple models and fzf is not installed, you get an ambiguity error listing the matches.
 
 ---
 
-## llm rzob embed
+## llm fcio embed
 
-Generate embeddings for one or more texts. Use this for testing — for bulk ingestion, see [ingest](#llm-rzob-ingest).
+Generates embeddings for one or more texts. For bulk ingestion, use [ingest](#llm-fcio-ingest) instead.
 
 ```bash
 # Single text
-llm rzob embed bge "Hello world"
+llm fcio embed bge "Hello world"
 
 # Multiple texts
-llm rzob embed bge "first text" "second text"
+llm fcio embed bge "first text" "second text"
 
 # Raw JSON with usage data
-llm rzob embed bge "Hello" --json
+llm fcio embed bge "Hello" --json
 ```
 
-The first argument is the model ID or alias. Run `llm rzob models --filter embed` to see what's available.
+The first argument is the model ID or alias. Run `llm fcio models --filter embed` to see available embedding models.
+
+`-m, --model <id>`
+: Selects the embedding model (default: `bge-m3-567m`).
 
 `--json`
-: Output raw JSON including usage data.
+: Outputs raw JSON including usage data.
 
 `-d, --dimensions <int>`
-: Truncate the embedding vector to a specific number of dimensions.
+: Truncates the embedding vector to this many dimensions.
 
 ---
 
-## llm rzob ingest
+## llm fcio ingest
 
-Chunk files into line-based overlapping segments, embed them, and store them in a named collection for semantic search via `llm similar`.
+Chunks files into line-based overlapping segments, embeds them, and stores them in a named collection for `llm similar` queries.
 
 ```bash
 # Ingest markdown files from a directory (recursive)
-llm rzob ingest my-project .
+llm fcio ingest my-project .
 
 # Python files with custom chunking
-llm rzob ingest my-project ./src/ --glob "*.py" --chunk-size 50 --overlap 10
+llm fcio ingest my-project ./src/ --glob "*.py" --chunk-size 50 --overlap 10
 
 # Explicit files
-llm rzob ingest my-project README.md CONTRIBUTING.md --chunk-size 50
+llm fcio ingest my-project README.md CONTRIBUTING.md --chunk-size 50
 
 # Skip the confirmation preview
-llm rzob ingest my-project ./docs/ --yes
+llm fcio ingest my-project ./docs/ --yes
 ```
 
 ### How chunking works
 
-Files are split into segments of `--chunk-size` lines. Consecutive chunks overlap by `--overlap` lines so that information at chunk boundaries is not lost. Each chunk gets an ID encoding the file path and line range (e.g. `src/main.py:42-71`) so you can trace similarity results back to the source.
+Files are split into segments of `--chunk-size` lines. Consecutive chunks overlap by `--overlap` lines so information at chunk boundaries is preserved. Each chunk ID encodes the file path and line range (e.g. `src/main.py:42-71`) for tracing similarity results back to the source.
 
 ### File discovery
 
-When you pass a directory, files are found recursively using the `--glob` pattern. Files matching `.gitignore` rules are excluded. Common directories (`venv/`, `.venv/`, `node_modules/`, `__pycache__/`, `.git/`) are always excluded.
+When you pass a directory, files are found recursively using the `--glob` pattern. Files matching `.gitignore` rules are excluded. These directories are always excluded: `venv/`, `.venv/`, `node_modules/`, `__pycache__/`, `.git/`, `*.egg-info/`.
 
-When you pass explicit file paths, no filtering is applied — the files are chunked and embedded as-is.
+Explicit file paths bypass all filtering — they are chunked and embedded as-is.
 
 ### Confirmation preview
 
-By default, the command lists all discovered files with their chunk counts and asks for confirmation before embedding. Use `--yes` to skip this.
+By default, the command lists all discovered files with their chunk counts and asks for confirmation. Use `--yes` to skip this.
 
 ### Ingesting multiple file types
 
-Multiple invocations write into the same collection. Ingest different formats separately:
+Multiple invocations write into the same collection:
 
 ```bash
-llm rzob ingest my-project . --glob "*.md" --yes
-llm rzob ingest my-project . --glob "*.py" --chunk-size 50 --overlap 10 --yes
+llm fcio ingest my-project . --glob "*.md" --yes
+llm fcio ingest my-project . --glob "*.py" --chunk-size 50 --overlap 10 --yes
 
 # Search across both
 llm similar my-project -c "how does error handling work"
 ```
 
-Manage collections with the standard `llm` commands:
+Manage collections with standard `llm` commands:
 
 ```bash
 llm collections list
@@ -181,7 +183,7 @@ llm collections delete my-project
 : File pattern for directory discovery (default: `*.md`).
 
 `-m, --model <id>`
-: Embedding model (default: `bge-m3-567m`). Only applies when creating a new collection.
+: Embedding model for a new collection (default: `bge-m3-567m`). Ignored if the collection already exists — delete and recreate to change models.
 
 `--chunk-size <int>`
 : Lines per chunk (default: 30).
@@ -190,22 +192,22 @@ llm collections delete my-project
 : Overlap lines between consecutive chunks (default: 5).
 
 `--yes`
-: Skip the confirmation preview.
+: Skips the confirmation preview and starts embedding immediately.
 
-### When things go wrong
+### Failure modes
 
 - **No files found** — the command fails. Check your `--glob` pattern and directory path.
 - **Empty files** — produce no chunks and are silently skipped.
-- **Existing collection** — the `-m` flag is ignored. The collection keeps its original model. To change models, delete and recreate the collection.
+- **Existing collection** — the `-m` flag is ignored. Delete and recreate the collection to change models.
 
 ---
 
-## llm rzob health
+## llm fcio health
 
-Check API connectivity, authentication, and endpoint availability.
+Checks API connectivity, authentication, and endpoint availability.
 
 ```bash
-llm rzob health
+llm fcio health
 ```
 
 Reports three checks:
@@ -217,28 +219,69 @@ Reports three checks:
 Use this as a first step when troubleshooting.
 
 `--json`
-: Output results as JSON.
+: Outputs results as JSON.
 
 ---
 
-## llm rzob tokens
+## llm fcio capabilities
 
-Estimate how many tokens a prompt consumes. Sends a minimal request and reports counts from the API response.
+Shows detailed endpoint capabilities, available models by type (chat/embed/other), and feature probes (chat completions, streaming, embeddings).
 
 ```bash
-llm rzob tokens gpt-oss:20b "count these tokens"
+llm fcio capabilities
 
-# JSON output
-llm rzob tokens gpt-oss:20b "some text" --json
+# Raw JSON output
+llm fcio capabilities --json
 ```
 
-If the API does not return token usage, the command falls back to a rough heuristic (~4 characters per token) and prints a warning.
+`--json`
+: Outputs full capability report as JSON.
 
-`model_id`
-: The model to test against (required, first positional argument).
+---
+
+## llm fcio tokens
+
+Estimates how many tokens a prompt consumes by sending a minimal request and reporting usage from the API response.
+
+```bash
+llm fcio tokens gpt-oss:20b "count these tokens"
+
+# JSON output
+llm fcio tokens gpt-oss:20b "some text" --json
+```
+
+If the API does not return token usage, falls back to a rough heuristic (~4 characters per token) and prints a warning.
+
+`-m, --model <id>`
+: Selects the model to test against (default: `gpt-oss:20b`).
 
 `text`
 : One or more words forming the prompt (required).
 
 `--json`
-: Output usage data as JSON.
+: Outputs usage data as JSON.
+
+---
+
+## llm fcio simulate
+
+Streams a simulated LLM response with Rich markdown rendering. Useful for testing the rendering pipeline without hitting the API.
+
+```bash
+llm fcio simulate
+
+# Raw markdown output (no Rich formatting)
+llm fcio simulate --raw
+
+# Adjust streaming speed
+llm fcio simulate --speed fast
+```
+
+`--speed <speed>`
+: Streaming speed: `fast`, `normal`, or `slow` (default: `normal`).
+
+`--seed <int>`
+: Random seed for reproducible output (default: 42).
+
+`--raw`
+: Outputs raw markdown without Rich formatting.

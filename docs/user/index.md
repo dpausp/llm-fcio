@@ -1,24 +1,20 @@
 # User Guide
 
-:::{warning}
-This plugin has **no automated test coverage**. Commands may behave differently than documented. If something doesn't work as expected, run `llm rzob health` to check connectivity, and consult the [CLI Reference](cli-reference.md) for exact command syntax.
-:::
-
-llm-fcio is a plugin for the [llm](https://llm.datasette.io/) CLI that connects to the FCIO RZOB API — an OpenAI-compatible endpoint on AMD hardware. It lets you chat with models, generate embeddings, and ingest files for semantic search.
+llm-fcio connects the [llm](https://llm.datasette.io/) CLI to the FCIO AI platform — an OpenAI-compatible endpoint on AMD hardware. Chat with models, generate embeddings, ingest files for semantic search.
 
 ## Getting Started
 
 Prerequisites: [llm](https://llm.datasette.io/) must be installed.
 
 1. Install the plugin: `llm install llm-fcio`
-2. Set your API key: `llm keys set fcio-rzob` (or set the `FCIO_RZOB_API_KEY` environment variable)
-3. Fetch available models: `llm rzob refresh`
+2. Set your API key: `llm keys set fcio-rzob` (or set `FCIO_RZOB_API_KEY`)
+3. Fetch available models: `llm fcio refresh`
+
+After step 3, all chat and embedding models work through the standard `llm` command.
 
 ## Common Tasks
 
 ### Ask a model a question
-
-After `llm rzob refresh`, chat models work through the standard `llm` command:
 
 ```bash
 llm -m fcio-rzob/gpt-oss-20b "Explain transformers in three sentences"
@@ -48,33 +44,35 @@ Options: `temperature` (0–2), `max_tokens`, `top_p` (0–1).
 
 ```bash
 # Ingest files into a collection
-llm rzob ingest my-project . --yes
+llm fcio ingest my-project . --yes
 
 # Search across the collection
 llm similar my-project -c "how does error handling work"
 ```
 
-See [Ingesting Files](cli-reference.md#llm-rzob-ingest) for chunking options, file discovery, and multi-format workflows.
+See [CLI Reference](cli-reference.md#llm-fcio-ingest) for chunking options and multi-format workflows.
 
 ### Check if the API is working
 
 ```bash
-llm rzob health
+llm fcio health
 ```
+
+Reports auth status, API reachability, and chat endpoint availability.
 
 ### See available models
 
 ```bash
-llm rzob models
-llm rzob models --filter oss
+llm fcio models
+llm fcio models --filter oss
 ```
 
 ## What This Plugin Does Not Do
 
-- **Image or audio generation** — the API serves text chat completions and embeddings only
-- **Function calling from the `llm` CLI** — the model options support it, but there is no CLI interface for tool definitions
-- **Fine-tuning or training** — no training endpoints are exposed
-- **Rate limit management** — the plugin sends requests directly; if you hit rate limits, you see the raw API error
+- **Image or audio generation** — text chat completions and embeddings only.
+- **Function calling from the `llm` CLI** — the model options support it, but there is no CLI interface for tool definitions.
+- **Fine-tuning or training** — no training endpoints are exposed.
+- **Rate limit management** — requests go straight to the API; rate limit errors surface as raw API errors.
 
 ```{toctree}
 :hidden:
