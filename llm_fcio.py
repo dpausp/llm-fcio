@@ -245,7 +245,7 @@ class RzobModel(llm.KeyModel):
         self._location = location
 
     def __str__(self) -> str:
-        return self.model_id
+        return f"Flying Circus: {self.model_id}"
 
     def execute(
         self,
