@@ -245,7 +245,7 @@ class RzobModel(llm.KeyModel):
         self._location = location
 
     def __str__(self) -> str:
-        return f"{self._location.name}: {self.api_id}"
+        return self.model_id
 
     def execute(
         self,
