@@ -99,6 +99,42 @@ both formats transparently.
 The chunk size and overlap are configurable. The default (30 lines / 5 overlap)
 targets code files; larger chunks suit prose documents.
 
+## Streaming Markdown Renderer
+
+The `_StreamingRenderer` class (in `llm_fcio.py`) provides in-process markdown rendering for chat commands. It replaces raw text output with Rich-formatted blocks.
+
+### Block detection
+
+Input streams in as arbitrary chunks (token-sized). A line buffer splits chunks on `\n` boundaries. The `_BlockDetector` state machine identifies block boundaries:
+
+- **Blank line** → finalize current text block
+- **Opening code fence** (````python`) → start code block, finalize any preceding text
+- **Closing code fence** (`````) → finalize code block
+
+Finalized blocks are rendered immediately via Rich.
+
+### Rendering
+
+Each block type gets specific treatment:
+
+- **Text blocks** → `rich.markdown.Markdown` (headings, bold, italic, lists, tables, links, blockquotes)
+- **Code blocks with known language** → `rich.syntax.Syntax` with monokai theme
+- **Code blocks without language** → `rich.text.Text` (plain monospace)
+
+Every render call is followed by `sys.stdout.flush()` to guarantee output reaches the terminal immediately, even in non-TTY contexts.
+
+### Auto-detection
+
+`llm rzob chat` auto-detects whether to render markdown:
+
+- **Terminal** (`sys.stdout.isatty()` is True) → `--markdown` by default
+- **Pipe** (stdout is not a TTY) → `--no-markdown` by default
+- Override with `--markdown` or `--no-markdown` flag
+
+### Standalone pipe renderer
+
+`scripts/mdscream.py` is a standalone PEP 723 script that provides the same rendering for piped output. It uses `sys.stdin.buffer.read1()` for non-blocking input and detects terminal width from stdout (fd 1) instead of stdin. See [Testing Streaming Output](testing-streaming) for testing workflows.
+
 ## Testing
 
 Tests live in `tests/` using pytest. The initial test suite covers three pure

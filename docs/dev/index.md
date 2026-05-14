@@ -6,4 +6,5 @@ Technical documentation for developers contributing to llm-fcio.
 :maxdepth: 2
 
 architecture
+testing-streaming
 ```
