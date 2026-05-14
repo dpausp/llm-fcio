@@ -766,57 +766,143 @@ def register_commands(cli: click.Group) -> None:
                 click.echo(f"Text {i + 1}: [{len(vec)} dims] {vec[:5]}... (truncated)")
                 click.echo(f"  Usage: {emb.get('usage', {})}")
 
-    # ── health ─────────────────────────────────────────
-
-    @fcio.command("health")
+    @fcio.command("capabilities")
     @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
     @click.pass_context
-    def cmd_health(ctx: click.Context, as_json: bool) -> None:
-        """Check API health and auth"""
+    def cmd_capabilities(ctx: click.Context, as_json: bool) -> None:
+        """Show endpoint capabilities and available models"""
         loc: Location = ctx.obj["location"]
         key = get_api_key(loc)
 
-        results = {}
-
-        # Auth test via /models
+        # ── Section 1: Endpoint ──
+        auth_status = "✅ valid"
+        models_data: list[dict] = []
         try:
             resp = api_request("GET", "/models", key, loc.api_base)
-            results["auth"] = "✅ valid"
-            results["models_count"] = len(resp.json().get("data", []))
+            models_data = resp.json().get("data", [])
         except ApiError as e:
-            results["auth"] = f"❌ {e}"
-            results["models_count"] = None
+            auth_status = f"❌ {e}"
 
-        # Base URL reachable
+        base_status = "❌ unreachable"
         try:
             r = httpx.get(loc.api_base.replace("/v1", ""), timeout=5)
-            results["base_url"] = f"✅ {r.status_code}"
-        except httpx.HTTPError as e:
-            results["base_url"] = f"❌ {e}"
+            base_status = f"✅ {r.status_code}"
+        except httpx.HTTPError:
+            pass
 
-        # Chat endpoint smoke test
-        try:
-            body = {"model": "test", "messages": [{"role": "user", "content": "."}]}
-            resp = api_request("POST", "/chat/completions", key, loc.api_base, json_data=body)
-            if resp.status_code == httpx.codes.UNAUTHORIZED:
-                results["chat_endpoint"] = "❌ auth failed"
-            elif resp.status_code == httpx.codes.NOT_FOUND:
-                results["chat_endpoint"] = "⚠️  endpoint not found"
+        # ── Section 2: Models ──
+        embed_keywords = ("embed", "bge", "gemma")
+        chat_models: list[dict] = []
+        embed_models: list[dict] = []
+        other_models: list[dict] = []
+        for m in models_data:
+            mid = m["id"]
+            if any(k in mid.lower() for k in embed_keywords):
+                embed_models.append(m)
+            elif "chat" in mid.lower() or not any(k in mid.lower() for k in embed_keywords):
+                chat_models.append(m)
             else:
-                results["chat_endpoint"] = f"✅ {resp.status_code}"
-        except ApiError as e:
-            if e.status_code == httpx.codes.BAD_REQUEST and "model" in str(e).lower():
-                results["chat_endpoint"] = "✅ reachable (model error expected)"
-            else:
-                results["chat_endpoint"] = f"❌ {e}"
+                other_models.append(m)
 
+        # ── Section 3: Feature probes ──
+        def _probe_endpoint(
+            method: str,
+            path: str,
+            body: dict | None = None,
+            model_error_marker: str = "model",
+        ) -> str:
+            try:
+                api_request(method, path, key, loc.api_base, json_data=body)
+                return "✅ reachable"
+            except ApiError as e:
+                if e.status_code and model_error_marker in str(e).lower():
+                    return "✅ reachable (model error expected)"
+                if e.status_code == httpx.codes.UNAUTHORIZED:
+                    return "❌ auth failed"
+                return f"❌ {e}"
+
+        chat_status = _probe_endpoint(
+            "POST",
+            "/chat/completions",
+            body={"model": "_probe_test", "messages": [{"role": "user", "content": "."}]},
+        )
+        streaming_status = _probe_endpoint(
+            "POST",
+            "/chat/completions",
+            body={
+                "model": "_probe_test",
+                "messages": [{"role": "user", "content": "."}],
+                "stream": True,
+            },
+        )
+        embed_status = _probe_endpoint(
+            "POST",
+            "/embeddings",
+            body={"model": "_probe_test", "input": "test"},
+        )
+
+        # ── Output ──
         if as_json:
-            click.echo(json.dumps(results, indent=2))
-        else:
-            click.echo(f"🔍 FCIO {loc.name.upper()} API Health")
-            click.echo("-" * 40)
-            for k, v in results.items():
-                click.echo(f"{k:<20} {v}")
+            payload = {
+                "endpoint": {
+                    "name": loc.name,
+                    "api_base": loc.api_base,
+                    "auth": auth_status,
+                    "base_url": base_status,
+                },
+                "models": {
+                    "chat": chat_models,
+                    "embedding": embed_models,
+                    "other": other_models,
+                    "counts": {
+                        "chat": len(chat_models),
+                        "embedding": len(embed_models),
+                        "other": len(other_models),
+                        "total": len(models_data),
+                    },
+                },
+                "features": {
+                    "chat_completions": chat_status,
+                    "streaming": streaming_status,
+                    "embeddings": embed_status,
+                },
+            }
+            click.echo(json.dumps(payload, indent=2))
+            return
+
+        # Human-readable output
+        click.echo(f"🔍 FCIO {loc.name.upper()} Capabilities")
+        click.echo("=" * 50)
+        click.echo()
+        click.echo("Endpoint:")
+        click.echo(f"  Name:        {loc.name}")
+        click.echo(f"  API Base:    {loc.api_base}")
+        click.echo(f"  Auth:        {auth_status}")
+        click.echo(f"  Base URL:    {base_status}")
+        click.echo()
+
+        def _print_models(label: str, models: list[dict]) -> None:
+            click.echo(f"{label} ({len(models)}):")
+            if not models:
+                click.echo("  (none)")
+            for m in models:
+                meta_parts: list[str] = []
+                if owned := m.get("owned_by"):
+                    meta_parts.append(f"owned: {owned}")
+                if created := m.get("created"):
+                    meta_parts.append(f"created: {created}")
+                meta = f"  [{', '.join(meta_parts)}]" if meta_parts else ""
+                click.echo(f"  - {m['id']}{meta}")
+            click.echo()
+
+        _print_models("Chat Models", chat_models)
+        _print_models("Embedding Models", embed_models)
+        _print_models("Other Models", other_models)
+
+        click.echo("Features:")
+        click.echo(f"  Chat completions:  {chat_status}")
+        click.echo(f"  Streaming:         {streaming_status}")
+        click.echo(f"  Embeddings:        {embed_status}")
 
     # ── simulate ────────────────────────────────────────
 
