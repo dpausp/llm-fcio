@@ -59,7 +59,7 @@ llms_txt_full_build = True
 
 
 
-def _skip_member(app, what, name, obj, skip, options):
+def _skip_member(app: object, what: str, name: str, obj: object, skip: bool, options: object) -> bool | None:
     if name.startswith("_"):
         return True
     if what == "class" and "Test" in name:
@@ -69,7 +69,7 @@ def _skip_member(app, what, name, obj, skip, options):
     return None
 
 
-def _strip_pydantic_docstring(app, docname, source):
+def _strip_pydantic_docstring(app: object, docname: str, source: list[str]) -> None:
     """Strip inherited Pydantic BaseModel docstring from autoapi RST."""
     if not docname.startswith("autoapi/"):
         return
@@ -84,6 +84,6 @@ def _strip_pydantic_docstring(app, docname, source):
     )
 
 
-def setup(app):
+def setup(app: object) -> None:
     app.connect("autoapi-skip-member", _skip_member)
     app.connect("source-read", _strip_pydantic_docstring)

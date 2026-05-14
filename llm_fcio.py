@@ -1,12 +1,15 @@
 """llm-fcio: Plugin für FCIO AI platform (multi-location)"""
 
 import json
+import random
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Iterator
+import time
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import click
 import httpx
@@ -253,7 +256,7 @@ class RzobModel(llm.KeyModel):
         stream: bool,
         response: llm.Response,
         conversation: llm.Conversation | None,
-        key: str,
+        key: str | None,
     ) -> Iterator[str]:
         messages = []
         if prompt.system:
@@ -264,7 +267,7 @@ class RzobModel(llm.KeyModel):
                     messages.append({"role": "system", "content": r.prompt.system})
                 if r.prompt.prompt:
                     messages.append({"role": "user", "content": r.prompt.prompt})
-                messages.append({"role": "assistant", "content": r.text_or_raise()})
+                messages.append({"role": "assistant", "content": r.text_or_raise()})  # ty: ignore[unresolved-attribute]
         # Build user message with attachments
         user_content_parts = []
         for att in prompt.attachments or []:
@@ -282,17 +285,17 @@ class RzobModel(llm.KeyModel):
             )
             messages.append({"role": "user", "content": content})
 
-        body = {"model": self.api_id, "messages": messages}
-        if prompt.options.temperature is not None:
-            body["temperature"] = prompt.options.temperature
-        if prompt.options.max_tokens is not None:
-            body["max_tokens"] = prompt.options.max_tokens
-        if prompt.options.top_p is not None:
-            body["top_p"] = prompt.options.top_p
-        if prompt.options.tools is not None:
-            body["tools"] = prompt.options.tools
-        if prompt.options.response_format is not None:
-            body["response_format"] = prompt.options.response_format
+        body: dict[str, Any] = {"model": self.api_id, "messages": messages}
+        if prompt.options.temperature is not None:  # ty: ignore[unresolved-attribute]
+            body["temperature"] = prompt.options.temperature  # ty: ignore[unresolved-attribute]
+        if prompt.options.max_tokens is not None:  # ty: ignore[unresolved-attribute]
+            body["max_tokens"] = prompt.options.max_tokens  # ty: ignore[unresolved-attribute]
+        if prompt.options.top_p is not None:  # ty: ignore[unresolved-attribute]
+            body["top_p"] = prompt.options.top_p  # ty: ignore[unresolved-attribute]
+        if prompt.options.tools is not None:  # ty: ignore[unresolved-attribute]
+            body["tools"] = prompt.options.tools  # ty: ignore[unresolved-attribute]
+        if prompt.options.response_format is not None:  # ty: ignore[unresolved-attribute]
+            body["response_format"] = prompt.options.response_format  # ty: ignore[unresolved-attribute]
 
         headers = {
             "Authorization": f"Bearer {key}",
@@ -340,7 +343,7 @@ class RzobEmbeddingModel(llm.EmbeddingModel):
         self.key_env_var = location.env_var
         self._location = location
 
-    def embed_batch(self, items: Iterator[str | bytes]) -> Iterator[list[float]]:
+    def embed_batch(self, items: Iterable[str | bytes]) -> Iterator[list[float]]:
         key = self.get_key()
         api_base = self._location.api_base
         resp = httpx.post(
@@ -747,7 +750,7 @@ def register_commands(cli: click.Group) -> None:
         loc: Location = ctx.obj["location"]
         key = get_api_key(loc)
 
-        body = {
+        body: dict[str, Any] = {
             "model": model_id,
             "input": list(text) if len(text) > 1 else text[0],
         }
@@ -922,8 +925,6 @@ def register_commands(cli: click.Group) -> None:
         model response. Blocks are rendered as they finalize (paragraph,
         code fence, list). Use --raw for unformatted pipe output.
         """
-        import random
-        import time
 
         rng = random.Random(seed)
 
@@ -1003,13 +1004,13 @@ def register_commands(cli: click.Group) -> None:
             if raw:
                 click.echo(chunk, nl=False)
                 click.get_text_stream("stdout").flush()
-            else:
+            elif renderer is not None:
                 renderer.feed(chunk)
 
             sleep_s = (delay_ms + rng.randint(-jitter_ms, jitter_ms)) / 1000.0
             time.sleep(max(0.0, sleep_s))
 
-        if not raw:
+        if not raw and renderer is not None:
             renderer.flush()
 
     # ── tokens ─────────────────────────────────────────
@@ -1207,11 +1208,11 @@ def _send_chat_request(
                     "Content-Type": "application/json",
                 }
                 for content in _iter_sse_content(client, url, sse_headers, body):
-                    if render:
+                    if render and renderer is not None:
                         renderer.feed(content)
                     else:
                         click.echo(content, nl=False)
-            if render:
+            if render and renderer is not None:
                 renderer.flush()
             else:
                 click.echo()

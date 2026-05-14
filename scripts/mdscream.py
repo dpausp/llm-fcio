@@ -132,7 +132,7 @@ def _render_block(block: Block) -> None:
                 )
                 sys.stdout.flush()
                 return
-            except Exception:  # noqa: BLE001
+            except (ValueError, OSError):
                 pass
         _console.print(Text(code))
         sys.stdout.flush()
@@ -143,7 +143,7 @@ def _render_block(block: Block) -> None:
         return
     try:
         _console.print(Markdown(text))
-    except Exception:  # noqa: BLE001
+    except (ValueError, OSError):
         _console.print(Text(text))
     sys.stdout.flush()
 
