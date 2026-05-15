@@ -35,6 +35,17 @@ from rich.text import Text
 _VERBOSE: bool = False
 _debug_console = Console(stderr=True, force_terminal=True)
 
+
+def _generate_debug_id() -> str:
+    """Generate a short unique debug ID for X-Skvaider-Debug-ID header."""
+    try:
+        import shortuuid
+
+        return f"llm-fcio-{shortuuid.uuid()}"
+    except ImportError:
+        return f"llm-fcio-{int(time.time())}-{random.randbytes(4).hex()}"
+
+
 # ── Location Configuration ──────────────────────────────
 
 
@@ -86,7 +97,10 @@ def _make_client(*, debug: bool = False, timeout: float = 30.0) -> httpx.Client:
     if not debug:
         return httpx.Client(timeout=timeout)
 
+    debug_id = _generate_debug_id()
+
     def _on_request(request: httpx.Request) -> None:
+        request.headers["X-Skvaider-Debug-ID"] = debug_id
         _debug_console.print(f"[bold blue]\u2192[/bold blue] {request.method} {request.url.path}")
         for name, value in request.headers.items():
             if name.lower() == "authorization":
@@ -703,13 +717,39 @@ def register_commands(cli: click.Group) -> None:
     # ── models ─────────────────────────────────────────
 
     @fcio.command("models")
+    @click.argument("model_id", required=False)
     @click.option("--json", "as_json", is_flag=True, help="Output as raw JSON")
     @click.option("--filter", "filt", help="Filter models by name substring")
     @click.pass_context
-    def cmd_models(ctx: click.Context, as_json: bool, filt: str | None) -> None:
-        """List available models from the API"""
+    def cmd_models(
+        ctx: click.Context, model_id: str | None, as_json: bool, filt: str | None
+    ) -> None:
+        """List available models, or show details for MODEL_ID"""
         loc: Location = ctx.obj["location"]
         key = get_api_key(loc)
+
+        if model_id:
+            # Single model detail view
+            try:
+                resp = api_request("GET", f"/models/{model_id}", key, loc.api_base)
+            except ApiError as e:
+                if e.status_code == 404:
+                    raise click.ClickException(f"Model not found: {model_id}") from e
+                raise
+            data = resp.json().get("data", resp.json())
+
+            if as_json:
+                click.echo(json.dumps(data, indent=2))
+            else:
+                click.echo(f"Model: {data.get('id', model_id)}")
+                click.echo(f"ID:     {data.get('id', 'unknown')}")
+                click.echo(f"Owner:  {data.get('owned_by', 'unknown')}")
+                created = data.get("created")
+                click.echo(f"Created: {created if created else 'unknown'}")
+                click.echo("Type:   chat")
+            return
+
+        # List all models
         resp = api_request("GET", "/models", key, loc.api_base)
         models = resp.json().get("data", [])
 
@@ -978,6 +1018,58 @@ def register_commands(cli: click.Group) -> None:
         click.echo(f"  Chat completions:  {chat_status} (POST /chat/completions)")
         click.echo(f"  Streaming:         {streaming_status} (POST /chat/completions, stream)")
         click.echo(f"  Embeddings:        {embed_status} (POST /embeddings)")
+
+    # ── health ──────────────────────────────────────────
+
+    @fcio.command("health")
+    @click.option("--json", "as_json", is_flag=True, help="Output raw JSON")
+    @click.pass_context
+    def cmd_health(ctx: click.Context, as_json: bool) -> None:
+        """Check health of the FCIO AI platform"""
+        loc: Location = ctx.obj["location"]
+        key = get_api_key(loc)
+
+        health_base = loc.api_base.removesuffix("/openai/v1")
+        health_url = f"{health_base}/health"
+
+        try:
+            with _make_client(debug=_VERBOSE, timeout=15.0) as client:
+                resp = client.get(
+                    health_url,
+                    headers={"Authorization": f"Bearer {key}"},
+                )
+            if resp.status_code == 404:
+                click.echo(f"\u26a0\ufe0f  Health endpoint not available at {health_url}")
+                click.echo("   The admin router may not be mounted for this location.")
+                return
+            resp.raise_for_status()
+            data = resp.json()
+        except httpx.HTTPError as e:
+            raise click.ClickException(f"Health check failed: {e}") from e
+
+        if as_json:
+            click.echo(json.dumps(data, indent=2))
+            return
+
+        overall = data.get("status", "unknown")
+        icon_map = {"ok": "\u2705", "warning": "\u26a0\ufe0f", "critical": "\u274c"}
+        overall_icon = icon_map.get(overall, "?")
+
+        click.echo(f"FCIO {loc.name.upper()} Health")
+        click.echo("=" * 40)
+        click.echo(f"Status: {overall_icon} {overall}")
+        click.echo()
+
+        checks = data.get("checks", {})
+        if checks:
+            click.echo("Checks:")
+            max_name_len = max(len(n) for n in checks)
+            for name, check in checks.items():
+                cstatus = check.get("status", "unknown")
+                cmsg = check.get("message", "")
+                cicon = icon_map.get(cstatus, "?")
+                padded = name.ljust(max_name_len)
+                click.echo(f"  {cicon} {padded}  {cmsg}")
 
     # ── simulate ────────────────────────────────────────
 
