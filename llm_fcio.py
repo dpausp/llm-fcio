@@ -489,9 +489,12 @@ _SHORT_EMBED_ALIASES = {
 
 @llm.hookimpl
 def register_models(register: Callable) -> None:
+    chat_keywords = ("gpt", "llama", "qwen", "mistral", "chat", "claude", "deepseek")
     for loc_name, loc in LOCATIONS.items():
         for m in _load_models(loc_name):
             mid = m["id"]
+            if not any(k in mid.lower() for k in chat_keywords):
+                continue
             safe = m.get("safe_id", mid.replace(":", "-"))
             short = _SHORT_CHAT_ALIASES.get(mid) if loc_name == "rzob" else None
             aliases = [safe] + ([short] if short else [])
@@ -786,15 +789,10 @@ def register_commands(cli: click.Group) -> None:
         except ApiError as e:
             auth_status = f"❌ {e}"
 
-        base_status = "❌ unreachable"
-        try:
-            r = httpx.get(loc.api_base.replace("/v1", ""), timeout=5)
-            base_status = f"✅ {r.status_code}"
-        except httpx.HTTPError:
-            pass
 
         # ── Section 2: Models ──
         embed_keywords = ("embed", "bge", "gemma")
+        chat_keywords = ("gpt", "llama", "qwen", "mistral", "chat", "claude", "deepseek")
         chat_models: list[dict] = []
         embed_models: list[dict] = []
         other_models: list[dict] = []
@@ -802,7 +800,7 @@ def register_commands(cli: click.Group) -> None:
             mid = m["id"]
             if any(k in mid.lower() for k in embed_keywords):
                 embed_models.append(m)
-            elif "chat" in mid.lower() or not any(k in mid.lower() for k in embed_keywords):
+            elif any(k in mid.lower() for k in chat_keywords):
                 chat_models.append(m)
             else:
                 other_models.append(m)
@@ -816,10 +814,10 @@ def register_commands(cli: click.Group) -> None:
         ) -> str:
             try:
                 api_request(method, path, key, loc.api_base, json_data=body)
-                return "✅ reachable"
+                return "✅ available"
             except ApiError as e:
                 if e.status_code and model_error_marker in str(e).lower():
-                    return "✅ reachable (model error expected)"
+                    return "✅ available"
                 if e.status_code == httpx.codes.UNAUTHORIZED:
                     return "❌ auth failed"
                 return f"❌ {e}"
@@ -851,7 +849,6 @@ def register_commands(cli: click.Group) -> None:
                     "name": loc.name,
                     "api_base": loc.api_base,
                     "auth": auth_status,
-                    "base_url": base_status,
                 },
                 "models": {
                     "chat": chat_models,
@@ -881,7 +878,6 @@ def register_commands(cli: click.Group) -> None:
         click.echo(f"  Name:        {loc.name}")
         click.echo(f"  API Base:    {loc.api_base}")
         click.echo(f"  Auth:        {auth_status}")
-        click.echo(f"  Base URL:    {base_status}")
         click.echo()
 
         def _print_models(label: str, models: list[dict]) -> None:
