@@ -32,6 +32,9 @@ from rich.progress import (
 from rich.syntax import Syntax
 from rich.text import Text
 
+_VERBOSE: bool = False
+_debug_console = Console(stderr=True, force_terminal=True)
+
 # ── Location Configuration ──────────────────────────────
 
 
@@ -78,6 +81,61 @@ def get_api_key(loc: Location) -> str:
     return key
 
 
+def _make_client(*, debug: bool = False, timeout: float = 30.0) -> httpx.Client:
+    """Create httpx.Client with optional debug logging event hooks."""
+    if not debug:
+        return httpx.Client(timeout=timeout)
+
+    def _on_request(request: httpx.Request) -> None:
+        _debug_console.print(f"[bold blue]\u2192[/bold blue] {request.method} {request.url.path}")
+        for name, value in request.headers.items():
+            if name.lower() == "authorization":
+                value = "Bearer sk-***..."
+            _debug_console.print(f"  [dim]{name}:[/dim] {value}")
+        if request.content:
+            try:
+                body = json.loads(request.content)
+                pretty = json.dumps(body, indent=2)
+                _debug_console.print(Syntax(pretty, "json", theme="monokai", line_numbers=False))
+            except json.JSONDecodeError, UnicodeDecodeError:
+                raw = request.content.decode("utf-8", errors="replace")
+                if len(raw) > 500:
+                    raw = raw[:500] + "..."
+                _debug_console.print(raw)
+
+    def _on_response(response: httpx.Response) -> None:
+        _debug_console.print(
+            f"[bold green]\u2190[/bold green] {response.status_code} {response.reason_phrase}"
+        )
+        for name, value in response.headers.items():
+            _debug_console.print(f"  [dim]{name}:[/dim] {value}")
+        ct = response.headers.get("content-type", "")
+        if "text/event-stream" in ct:
+            _debug_console.print("  [dim]Response: SSE stream[/dim]")
+            return
+        try:
+            body_text = response.text
+            if not body_text:
+                return
+            try:
+                body_json = json.loads(body_text)
+                pretty = json.dumps(body_json, indent=2)
+                if len(pretty) > 2000:
+                    pretty = pretty[:2000] + "\n... (truncated)"
+                _debug_console.print(Syntax(pretty, "json", theme="monokai", line_numbers=False))
+            except json.JSONDecodeError, UnicodeDecodeError:
+                if len(body_text) > 500:
+                    body_text = body_text[:500] + "... (truncated)"
+                _debug_console.print(body_text)
+        except Exception:  # noqa: BLE001
+            _debug_console.print("  [dim](body not available)[/dim]")
+
+    return httpx.Client(
+        timeout=timeout,
+        event_hooks={"request": [_on_request], "response": [_on_response]},
+    )
+
+
 def api_request(
     method: str,
     path: str,
@@ -94,7 +152,7 @@ def api_request(
         "Accept": "application/json",
     }
 
-    with httpx.Client(timeout=30.0) as client:
+    with _make_client(debug=_VERBOSE, timeout=30.0) as client:
         response = client.request(
             method,
             url,
@@ -305,12 +363,12 @@ class RzobModel(llm.KeyModel):
         api_base = self._location.api_base
         if stream:
             body["stream"] = True
-            with httpx.Client() as client:
+            with _make_client(debug=_VERBOSE) as client:
                 url = f"{api_base}/chat/completions"
                 for content in _iter_sse_content(client, url, headers, body):
                     yield content
         else:
-            with httpx.Client() as client:
+            with _make_client(debug=_VERBOSE) as client:
                 resp = client.post(
                     f"{api_base}/chat/completions",
                     headers=headers,
@@ -346,18 +404,18 @@ class RzobEmbeddingModel(llm.EmbeddingModel):
     def embed_batch(self, items: Iterable[str | bytes]) -> Iterator[list[float]]:
         key = self.get_key()
         api_base = self._location.api_base
-        resp = httpx.post(
-            f"{api_base}/embeddings",
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-            },
-            json={"model": self.api_id, "input": list(items)},
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        for entry in resp.json()["data"]:
-            yield entry["embedding"]
+        with _make_client(debug=_VERBOSE, timeout=30.0) as client:
+            resp = client.post(
+                f"{api_base}/embeddings",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                },
+                json={"model": self.api_id, "input": list(items)},
+            )
+            resp.raise_for_status()
+            for entry in resp.json()["data"]:
+                yield entry["embedding"]
 
 
 # ── Streaming Markdown Renderer ─────────────────────────
@@ -594,7 +652,7 @@ def _chunk_lines(
 @llm.hookimpl
 def register_commands(cli: click.Group) -> None:
 
-    @cli.group()
+    @cli.group(invoke_without_command=True)
     @click.option(
         "-l",
         "--location",
@@ -603,11 +661,21 @@ def register_commands(cli: click.Group) -> None:
         type=click.Choice(list(LOCATIONS.keys())),
         help="FCIO location (default: rzob)",
     )
+    @click.option(
+        "-v",
+        "--verbose",
+        is_flag=True,
+        help="Log raw HTTP requests/responses",
+    )
     @click.pass_context
-    def fcio(ctx: click.Context, loc_name: str) -> None:
+    def fcio(ctx: click.Context, loc_name: str, verbose: bool) -> None:
         "Commands for the FCIO AI platform"
         ctx.ensure_object(dict)
         ctx.obj["location"] = LOCATIONS[loc_name]
+        global _VERBOSE
+        _VERBOSE = verbose
+        if ctx.invoked_subcommand is None:
+            click.echo(ctx.get_help())
 
     # ── refresh ────────────────────────────────────────
 
@@ -789,7 +857,6 @@ def register_commands(cli: click.Group) -> None:
         except ApiError as e:
             auth_status = f"❌ {e}"
 
-
         # ── Section 2: Models ──
         embed_keywords = ("embed", "bge", "gemma")
         chat_keywords = ("gpt", "llama", "qwen", "mistral", "chat", "claude", "deepseek")
@@ -862,9 +929,18 @@ def register_commands(cli: click.Group) -> None:
                     },
                 },
                 "features": {
-                    "chat_completions": chat_status,
-                    "streaming": streaming_status,
-                    "embeddings": embed_status,
+                    "chat_completions": {
+                        "status": chat_status,
+                        "method": "POST",
+                        "path": "/chat/completions",
+                    },
+                    "streaming": {
+                        "status": streaming_status,
+                        "method": "POST",
+                        "path": "/chat/completions",
+                        "param": "stream",
+                    },
+                    "embeddings": {"status": embed_status, "method": "POST", "path": "/embeddings"},
                 },
             }
             click.echo(json.dumps(payload, indent=2))
@@ -899,9 +975,9 @@ def register_commands(cli: click.Group) -> None:
         _print_models("Other Models", other_models)
 
         click.echo("Features:")
-        click.echo(f"  Chat completions:  {chat_status}")
-        click.echo(f"  Streaming:         {streaming_status}")
-        click.echo(f"  Embeddings:        {embed_status}")
+        click.echo(f"  Chat completions:  {chat_status} (POST /chat/completions)")
+        click.echo(f"  Streaming:         {streaming_status} (POST /chat/completions, stream)")
+        click.echo(f"  Embeddings:        {embed_status} (POST /embeddings)")
 
     # ── simulate ────────────────────────────────────────
 
@@ -1036,9 +1112,7 @@ def register_commands(cli: click.Group) -> None:
                 click.echo(json.dumps(usage, indent=2))
             else:
                 click.echo(f"Model: {model_id}")
-                click.echo(f"Prompt tokens:     {usage.get('prompt_tokens', '?')}")
-                click.echo(f"Completion tokens: {usage.get('completion_tokens', '?')}")
-                click.echo(f"Total:             {usage.get('total_tokens', '?')}")
+                click.echo(f"Tokens: {usage.get('prompt_tokens', '?')}")
         except ApiError as e:
             click.echo(f"⚠️  Token endpoint not supported: {e}", err=True)
             total_chars = sum(len(t) for t in text)
@@ -1197,7 +1271,7 @@ def _send_chat_request(
         body["stream"] = True
         try:
             renderer = _StreamingRenderer() if render else None
-            with httpx.Client() as client:
+            with _make_client(debug=_VERBOSE) as client:
                 url = f"{api_base}/chat/completions"
                 sse_headers = {
                     "Authorization": f"Bearer {key}",

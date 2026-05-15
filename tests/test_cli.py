@@ -372,7 +372,7 @@ def test_tokens_basic(runner: CliRunner, cli: click.Group) -> None:
         )
         result = runner.invoke(cli, ["fcio", "tokens", "hello world"])
     assert result.exit_code == 0
-    assert "Prompt tokens:" in result.output
+    assert "Tokens:" in result.output
     assert "10" in result.output
 
 
