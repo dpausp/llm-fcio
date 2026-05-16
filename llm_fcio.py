@@ -675,627 +675,634 @@ def _chunk_lines(
 # ── CLI Commands ────────────────────────────────────────
 
 
-@llm.hookimpl
-def register_commands(cli: click.Group) -> None:
+# ── fcio group ──────────────────────────────────────────
 
-    @cli.group(invoke_without_command=True)
-    @click.option(
-        "-l",
-        "--location",
-        "loc_name",
-        default=DEFAULT_LOCATION,
-        type=click.Choice(list(LOCATIONS.keys())),
-        help="FCIO location (default: rzob)",
-    )
-    @click.option(
-        "-v",
-        "--verbose",
-        is_flag=True,
-        help="Log raw HTTP requests/responses",
-    )
-    @click.option(
-        "--debug",
-        is_flag=True,
-        help="Enable server-side debug recording",
-    )
-    @click.pass_context
-    def fcio(ctx: click.Context, loc_name: str, verbose: bool, debug: bool) -> None:
-        "Commands for the FCIO AI platform"
-        ctx.ensure_object(dict)
-        ctx.obj["location"] = LOCATIONS[loc_name]
-        global _VERBOSE, _DEBUG
-        _VERBOSE = verbose
-        _DEBUG = debug
-        if ctx.invoked_subcommand is None:
-            click.echo(ctx.get_help())
 
-    # ── refresh ────────────────────────────────────────
+@click.group(invoke_without_command=True)
+@click.option(
+    "-l",
+    "--location",
+    "loc_name",
+    default=DEFAULT_LOCATION,
+    type=click.Choice(list(LOCATIONS.keys())),
+    help="FCIO location (default: rzob)",
+)
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Log raw HTTP requests/responses",
+)
+@click.option(
+    "--debug",
+    is_flag=True,
+    help="Enable server-side debug recording",
+)
+@click.pass_context
+def fcio(ctx: click.Context, loc_name: str, verbose: bool, debug: bool) -> None:
+    "Commands for the FCIO AI platform"
+    ctx.ensure_object(dict)
+    ctx.obj["location"] = LOCATIONS[loc_name]
+    global _VERBOSE, _DEBUG
+    _VERBOSE = verbose
+    _DEBUG = debug
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
 
-    @fcio.command()
-    @click.pass_context
-    def refresh(ctx: click.Context) -> None:
-        """Fetch available models from API and cache locally"""
-        loc: Location = ctx.obj["location"]
-        key = get_api_key(loc)
-        resp = api_request("GET", "/models", key, loc.api_base)
-        raw = resp.json()
-        data = raw.get("data", raw if isinstance(raw, list) else [])
-        models = []
-        for m in data:
-            mid = m["id"] if isinstance(m, dict) else str(m)
-            models.append(
-                {
-                    "id": mid,
-                    "safe_id": mid.replace(":", "-").replace(".", "_"),
-                },
-            )
-        _cache_path(loc.name).write_text(json.dumps(models, indent=2))
-        click.echo(f"Cached {len(models)} models for {loc.name}", err=True)
+    # ── refresh ────────────────────────────────────────────
 
-    # ── models ─────────────────────────────────────────
 
-    @fcio.command("models")
-    @click.argument("model_id", required=False)
-    @click.option("--json", "as_json", is_flag=True, help="Output as raw JSON")
-    @click.option("--filter", "filt", help="Filter models by name substring")
-    @click.pass_context
-    def cmd_models(
-        ctx: click.Context, model_id: str | None, as_json: bool, filt: str | None
-    ) -> None:
-        """List available models, or show details for MODEL_ID"""
-        loc: Location = ctx.obj["location"]
-        key = get_api_key(loc)
+@fcio.command()
+@click.pass_context
+def refresh(ctx: click.Context) -> None:
+    """Fetch available models from API and cache locally"""
+    loc: Location = ctx.obj["location"]
+    key = get_api_key(loc)
+    resp = api_request("GET", "/models", key, loc.api_base)
+    raw = resp.json()
+    data = raw.get("data", raw if isinstance(raw, list) else [])
+    models = []
+    for m in data:
+        mid = m["id"] if isinstance(m, dict) else str(m)
+        models.append(
+            {
+                "id": mid,
+                "safe_id": mid.replace(":", "-").replace(".", "_"),
+            },
+        )
+    _cache_path(loc.name).write_text(json.dumps(models, indent=2))
+    click.echo(f"Cached {len(models)} models for {loc.name}", err=True)
 
-        if model_id:
-            # Single model detail view
-            try:
-                resp = api_request("GET", f"/models/{model_id}", key, loc.api_base)
-            except ApiError as e:
-                if e.status_code == 404:
-                    raise click.ClickException(f"Model not found: {model_id}") from e
-                raise
-            data = resp.json().get("data", resp.json())
+    # ── models ─────────────────────────────────────────────
 
-            if as_json:
-                click.echo(json.dumps(data, indent=2))
-            else:
-                click.echo(f"Model: {data.get('id', model_id)}")
-                click.echo(f"ID:     {data.get('id', 'unknown')}")
-                click.echo(f"Owner:  {data.get('owned_by', 'unknown')}")
-                created = data.get("created")
-                click.echo(f"Created: {created if created else 'unknown'}")
-                click.echo("Type:   chat")
-            return
 
-        # List all models
-        resp = api_request("GET", "/models", key, loc.api_base)
-        models = resp.json().get("data", [])
+@fcio.command("models")
+@click.argument("model_id", required=False)
+@click.option("--json", "as_json", is_flag=True, help="Output as raw JSON")
+@click.option("--filter", "filt", help="Filter models by name substring")
+@click.pass_context
+def cmd_models(ctx: click.Context, model_id: str | None, as_json: bool, filt: str | None) -> None:
+    """List available models, or show details for MODEL_ID"""
+    loc: Location = ctx.obj["location"]
+    key = get_api_key(loc)
 
-        if filt:
-            models = [m for m in models if filt.lower() in m.get("id", "").lower()]
-
-        if as_json:
-            click.echo(json.dumps(models, indent=2))
-        else:
-            click.echo(f"{'Type':>10}  {'ID'}")
-            click.echo("-" * 55)
-            for m in models:
-                mid = m.get("id", "unknown")
-                mtype = (
-                    "embed" if any(k in mid.lower() for k in ("embed", "bge", "gemma")) else "chat"
-                )
-                click.echo(f"{mtype:>10}  {mid}")
-
-    # ── chat ───────────────────────────────────────────
-
-    @fcio.command("chat")
-    @click.argument("prompt", nargs=-1, required=False)
-    @click.option("-m", "--model", "model_id", default="gpt-oss:20b", help="Model ID")
-    @click.option("-s", "--system", help="System prompt")
-    @click.option("-t", "--temperature", type=float, default=0.7, help="Temperature")
-    @click.option("--max-tokens", type=int, help="Max tokens")
-    @click.option("--stream/--no-stream", default=True, help="Stream response")
-    @click.option("--json", "as_json", is_flag=True, help="Output full JSON response")
-    @click.option("-i", "--interactive", is_flag=True, help="Interactive chat mode")
-    @click.option(
-        "--markdown/--no-markdown",
-        default=None,
-        help="Rich markdown rendering (default: auto-detect from terminal)",
-    )
-    @click.pass_context
-    def cmd_chat(
-        ctx: click.Context,
-        prompt: tuple[str],
-        model_id: str,
-        system: str | None,
-        temperature: float,
-        max_tokens: int | None,
-        stream: bool,
-        as_json: bool,
-        interactive: bool,
-        markdown: bool | None,
-    ) -> None:
-        """Chat with a model, with optional Rich markdown rendering"""
-        loc: Location = ctx.obj["location"]
-        key = get_api_key(loc)
-        model_id = _resolve_model(model_id, key, loc.api_base)
-
-        # Auto-detect: render when stdout is a terminal (not a pipe)
-        do_render = markdown if markdown is not None else sys.stdout.isatty()
-
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-
-        prompt_text = " ".join(prompt) if prompt else None
-
-        if interactive:
-            click.echo(f"Interactive chat with {model_id} (Ctrl+D to exit)")
-            click.echo("-" * 50)
-            while True:
-                try:
-                    user_input = click.prompt("You", prompt_suffix="> ", default="")
-                    if not user_input.strip():
-                        continue
-                    messages.append({"role": "user", "content": user_input})
-                except EOFError:
-                    click.echo("\nGoodbye!")
-                    break
-
-                body = _build_chat_body(model_id, messages, temperature, max_tokens)
-                _send_chat_request(
-                    key, body, stream, as_json, render=do_render, api_base=loc.api_base
-                )
-                messages.append({"role": "assistant", "content": "[...]"})
-        else:
-            if not prompt_text:
-                raise click.ClickException("Prompt required (or use --interactive)")
-            messages.append({"role": "user", "content": prompt_text})
-            body = _build_chat_body(model_id, messages, temperature, max_tokens)
-            _send_chat_request(key, body, stream, as_json, render=do_render, api_base=loc.api_base)
-
-    # ── embed ──────────────────────────────────────────
-
-    @fcio.command("embed")
-    @click.argument("text", nargs=-1, required=True)
-    @click.option(
-        "-m",
-        "--model",
-        "model_id",
-        default="bge-m3-567m",
-        help="Embedding model (default: bge-m3-567m)",
-    )
-    @click.option("--json", "as_json", is_flag=True, help="Output raw JSON")
-    @click.option("-d", "--dimensions", type=int, help="Output dimension")
-    @click.pass_context
-    def cmd_embed(
-        ctx: click.Context,
-        text: tuple[str],
-        model_id: str,
-        as_json: bool,
-        dimensions: int | None,
-    ) -> None:
-        """Test embedding generation"""
-        loc: Location = ctx.obj["location"]
-        key = get_api_key(loc)
-
-        body: dict[str, Any] = {
-            "model": model_id,
-            "input": list(text) if len(text) > 1 else text[0],
-        }
-        if dimensions:
-            body["dimensions"] = dimensions
-
-        resp = api_request("POST", "/embeddings", key, loc.api_base, json_data=body)
-        data = resp.json()
+    if model_id:
+        # Single model detail view
+        try:
+            resp = api_request("GET", f"/models/{model_id}", key, loc.api_base)
+        except ApiError as e:
+            if e.status_code == 404:
+                raise click.ClickException(f"Model not found: {model_id}") from e
+            raise
+        data = resp.json().get("data", resp.json())
 
         if as_json:
             click.echo(json.dumps(data, indent=2))
         else:
-            embeddings = data.get("data", [])
-            for i, emb in enumerate(embeddings):
-                vec = emb.get("embedding", [])
-                click.echo(f"Text {i + 1}: [{len(vec)} dims] {vec[:5]}... (truncated)")
-                click.echo(f"  Usage: {emb.get('usage', {})}")
+            click.echo(f"Model: {data.get('id', model_id)}")
+            click.echo(f"ID:     {data.get('id', 'unknown')}")
+            click.echo(f"Owner:  {data.get('owned_by', 'unknown')}")
+            created = data.get("created")
+            click.echo(f"Created: {created if created else 'unknown'}")
+            click.echo("Type:   chat")
+        return
 
-    @fcio.command("capabilities")
-    @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-    @click.pass_context
-    def cmd_capabilities(ctx: click.Context, as_json: bool) -> None:
-        """Show endpoint capabilities and available models"""
-        loc: Location = ctx.obj["location"]
-        key = get_api_key(loc)
+    # List all models
+    resp = api_request("GET", "/models", key, loc.api_base)
+    models = resp.json().get("data", [])
 
-        # ── Section 1: Endpoint ──
-        auth_status = "✅ valid"
-        models_data: list[dict] = []
-        try:
-            resp = api_request("GET", "/models", key, loc.api_base)
-            models_data = resp.json().get("data", [])
-        except ApiError as e:
-            auth_status = f"❌ {e}"
+    if filt:
+        models = [m for m in models if filt.lower() in m.get("id", "").lower()]
 
-        # ── Section 2: Models ──
-        embed_keywords = ("embed", "bge", "gemma")
-        chat_keywords = ("gpt", "llama", "qwen", "mistral", "chat", "claude", "deepseek")
-        chat_models: list[dict] = []
-        embed_models: list[dict] = []
-        other_models: list[dict] = []
-        for m in models_data:
-            mid = m["id"]
-            if any(k in mid.lower() for k in embed_keywords):
-                embed_models.append(m)
-            elif any(k in mid.lower() for k in chat_keywords):
-                chat_models.append(m)
-            else:
-                other_models.append(m)
+    if as_json:
+        click.echo(json.dumps(models, indent=2))
+    else:
+        click.echo(f"{'Type':>10}  {'ID'}")
+        click.echo("-" * 55)
+        for m in models:
+            mid = m.get("id", "unknown")
+            mtype = "embed" if any(k in mid.lower() for k in ("embed", "bge", "gemma")) else "chat"
+            click.echo(f"{mtype:>10}  {mid}")
 
-        # ── Section 3: Feature probes ──
-        def _probe_endpoint(
-            method: str,
-            path: str,
-            body: dict | None = None,
-            model_error_marker: str = "model",
-        ) -> str:
+    # ── chat ───────────────────────────────────────────────
+
+
+@fcio.command("chat")
+@click.argument("prompt", nargs=-1, required=False)
+@click.option("-m", "--model", "model_id", default="gpt-oss:20b", help="Model ID")
+@click.option("-s", "--system", help="System prompt")
+@click.option("-t", "--temperature", type=float, default=0.7, help="Temperature")
+@click.option("--max-tokens", type=int, help="Max tokens")
+@click.option("--stream/--no-stream", default=True, help="Stream response")
+@click.option("--json", "as_json", is_flag=True, help="Output full JSON response")
+@click.option("-i", "--interactive", is_flag=True, help="Interactive chat mode")
+@click.option(
+    "--markdown/--no-markdown",
+    default=None,
+    help="Rich markdown rendering (default: auto-detect from terminal)",
+)
+@click.pass_context
+def cmd_chat(
+    ctx: click.Context,
+    prompt: tuple[str],
+    model_id: str,
+    system: str | None,
+    temperature: float,
+    max_tokens: int | None,
+    stream: bool,
+    as_json: bool,
+    interactive: bool,
+    markdown: bool | None,
+) -> None:
+    """Chat with a model, with optional Rich markdown rendering"""
+    loc: Location = ctx.obj["location"]
+    key = get_api_key(loc)
+    model_id = _resolve_model(model_id, key, loc.api_base)
+
+    # Auto-detect: render when stdout is a terminal (not a pipe)
+    do_render = markdown if markdown is not None else sys.stdout.isatty()
+
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+
+    prompt_text = " ".join(prompt) if prompt else None
+
+    if interactive:
+        click.echo(f"Interactive chat with {model_id} (Ctrl+D to exit)")
+        click.echo("-" * 50)
+        while True:
             try:
-                api_request(method, path, key, loc.api_base, json_data=body)
-                return "✅ available"
-            except ApiError as e:
-                if e.status_code and model_error_marker in str(e).lower():
-                    return "✅ available"
-                if e.status_code == httpx.codes.UNAUTHORIZED:
-                    return "❌ auth failed"
-                return f"❌ {e}"
+                user_input = click.prompt("You", prompt_suffix="> ", default="")
+                if not user_input.strip():
+                    continue
+                messages.append({"role": "user", "content": user_input})
+            except EOFError:
+                click.echo("\nGoodbye!")
+                break
 
-        chat_status = _probe_endpoint(
-            "POST",
-            "/chat/completions",
-            body={"model": "_probe_test", "messages": [{"role": "user", "content": "."}]},
-        )
-        streaming_status = _probe_endpoint(
-            "POST",
-            "/chat/completions",
-            body={
-                "model": "_probe_test",
-                "messages": [{"role": "user", "content": "."}],
-                "stream": True,
-            },
-        )
-        embed_status = _probe_endpoint(
-            "POST",
-            "/embeddings",
-            body={"model": "_probe_test", "input": "test"},
-        )
+            body = _build_chat_body(model_id, messages, temperature, max_tokens)
+            _send_chat_request(key, body, stream, as_json, render=do_render, api_base=loc.api_base)
+            messages.append({"role": "assistant", "content": "[...]"})
+    else:
+        if not prompt_text:
+            raise click.ClickException("Prompt required (or use --interactive)")
+        messages.append({"role": "user", "content": prompt_text})
+        body = _build_chat_body(model_id, messages, temperature, max_tokens)
+        _send_chat_request(key, body, stream, as_json, render=do_render, api_base=loc.api_base)
 
-        # ── Output ──
-        if as_json:
-            payload = {
-                "endpoint": {
-                    "name": loc.name,
-                    "api_base": loc.api_base,
-                    "auth": auth_status,
-                },
-                "models": {
-                    "chat": chat_models,
-                    "embedding": embed_models,
-                    "other": other_models,
-                    "counts": {
-                        "chat": len(chat_models),
-                        "embedding": len(embed_models),
-                        "other": len(other_models),
-                        "total": len(models_data),
-                    },
-                },
-                "features": {
-                    "chat_completions": {
-                        "status": chat_status,
-                        "method": "POST",
-                        "path": "/chat/completions",
-                    },
-                    "streaming": {
-                        "status": streaming_status,
-                        "method": "POST",
-                        "path": "/chat/completions",
-                        "param": "stream",
-                    },
-                    "embeddings": {"status": embed_status, "method": "POST", "path": "/embeddings"},
-                },
-            }
-            click.echo(json.dumps(payload, indent=2))
-            return
+    # ── embed ──────────────────────────────────────────────
 
-        # Human-readable output
-        click.echo(f"🔍 FCIO {loc.name.upper()} Capabilities")
-        click.echo("=" * 50)
-        click.echo()
-        click.echo("Endpoint:")
-        click.echo(f"  Name:        {loc.name}")
-        click.echo(f"  API Base:    {loc.api_base}")
-        click.echo(f"  Auth:        {auth_status}")
-        click.echo()
 
-        def _print_models(label: str, models: list[dict]) -> None:
-            click.echo(f"{label} ({len(models)}):")
-            if not models:
-                click.echo("  (none)")
-            for m in models:
-                meta_parts: list[str] = []
-                if owned := m.get("owned_by"):
-                    meta_parts.append(f"owned: {owned}")
-                if created := m.get("created"):
-                    meta_parts.append(f"created: {created}")
-                meta = f"  [{', '.join(meta_parts)}]" if meta_parts else ""
-                click.echo(f"  - {m['id']}{meta}")
-            click.echo()
+@fcio.command("embed")
+@click.argument("text", nargs=-1, required=True)
+@click.option(
+    "-m",
+    "--model",
+    "model_id",
+    default="bge-m3-567m",
+    help="Embedding model (default: bge-m3-567m)",
+)
+@click.option("--json", "as_json", is_flag=True, help="Output raw JSON")
+@click.option("-d", "--dimensions", type=int, help="Output dimension")
+@click.pass_context
+def cmd_embed(
+    ctx: click.Context,
+    text: tuple[str],
+    model_id: str,
+    as_json: bool,
+    dimensions: int | None,
+) -> None:
+    """Test embedding generation"""
+    loc: Location = ctx.obj["location"]
+    key = get_api_key(loc)
 
-        _print_models("Chat Models", chat_models)
-        _print_models("Embedding Models", embed_models)
-        _print_models("Other Models", other_models)
+    body: dict[str, Any] = {
+        "model": model_id,
+        "input": list(text) if len(text) > 1 else text[0],
+    }
+    if dimensions:
+        body["dimensions"] = dimensions
 
-        click.echo("Features:")
-        click.echo(f"  Chat completions:  {chat_status} (POST /chat/completions)")
-        click.echo(f"  Streaming:         {streaming_status} (POST /chat/completions, stream)")
-        click.echo(f"  Embeddings:        {embed_status} (POST /embeddings)")
+    resp = api_request("POST", "/embeddings", key, loc.api_base, json_data=body)
+    data = resp.json()
 
-    # ── simulate ────────────────────────────────────────
+    if as_json:
+        click.echo(json.dumps(data, indent=2))
+    else:
+        embeddings = data.get("data", [])
+        for i, emb in enumerate(embeddings):
+            vec = emb.get("embedding", [])
+            click.echo(f"Text {i + 1}: [{len(vec)} dims] {vec[:5]}... (truncated)")
+            click.echo(f"  Usage: {emb.get('usage', {})}")
 
-    @fcio.command("simulate")
-    @click.option(
-        "--speed",
-        type=click.Choice(["fast", "normal", "slow"]),
-        default="normal",
-        help="Streaming speed (default: normal)",
-    )
-    @click.option("--seed", type=int, default=42, help="Random seed for reproducibility")
-    @click.option("--raw", is_flag=True, help="Output raw markdown (no Rich rendering)")
-    def cmd_simulate(speed: str, seed: int, raw: bool) -> None:
-        """Stream a simulated LLM response with Rich markdown rendering.
 
-        Produces token-by-token markdown output that looks like a real
-        model response. Blocks are rendered as they finalize (paragraph,
-        code fence, list). Use --raw for unformatted pipe output.
-        """
+@fcio.command("capabilities")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def cmd_capabilities(ctx: click.Context, as_json: bool) -> None:
+    """Show endpoint capabilities and available models"""
+    loc: Location = ctx.obj["location"]
+    key = get_api_key(loc)
 
-        rng = random.Random(seed)
+    # ── Section 1: Endpoint ──
+    auth_status = "✅ valid"
+    models_data: list[dict] = []
+    try:
+        resp = api_request("GET", "/models", key, loc.api_base)
+        models_data = resp.json().get("data", [])
+    except ApiError as e:
+        auth_status = f"❌ {e}"
 
-        speeds = {"fast": (8, 3, 3, 8), "normal": (25, 12, 1, 4), "slow": (60, 25, 1, 2)}
-        delay_ms, jitter_ms, chunk_min, chunk_max = speeds[speed]
-
-        response = (
-            "# Python Decorators\n"
-            "\n"
-            "Decorators are one of Python's most powerful features. They allow you to "
-            "**modify** or *extend* the behavior of callable objects without permanently "
-            "modifying them.\n"
-            "\n"
-            "## Basic Syntax\n"
-            "\n"
-            "A decorator takes a function and returns a modified version:\n"
-            "\n"
-            "```python\n"
-            "def my_decorator(func):\n"
-            "    def wrapper(*args, **kwargs):\n"
-            '        print("Before call")\n'
-            "        result = func(*args, **kwargs)\n"
-            '        print("After call")\n'
-            "        return result\n"
-            "    return wrapper\n"
-            "\n"
-            "@my_decorator\n"
-            "def greet(name):\n"
-            '    print(f"Hello, {name}!")\n'
-            "\n"
-            "greet('World')\n"
-            "```\n"
-            "\n"
-            "## Key Points\n"
-            "\n"
-            "Important things to remember:\n"
-            "\n"
-            "- Decorators accept a function and return a new one\n"
-            "- The `@decorator` syntax is sugar for `func = decorator(func)`\n"
-            "- Use `functools.wraps` to preserve function metadata\n"
-            "- Multiple decorators apply bottom-up\n"
-            "\n"
-            "## Common Use Cases\n"
-            "\n"
-            "| Pattern | Decorator |\n"
-            "|---------|----------|\n"
-            "| Logging | `@log_calls` |\n"
-            "| Caching | `@lru_cache` |\n"
-            "| Auth | `@require_login` |\n"
-            "| Retry | `@retry(n=3)` |\n"
-            "\n"
-            "### Stacking Decorators\n"
-            "\n"
-            "```bash\n"
-            "@decorator_a\n"
-            "@decorator_b\n"
-            "def my_func():\n"
-            "    pass\n"
-            "# Same as: my_func = decorator_a(decorator_b(my_func))\n"
-            "```\n"
-            "\n"
-            "> Decorators are just functions that return functions. "
-            "Once you grasp that, everything else falls into place.\n"
-            "\n"
-            "See [PEP 318](https://peps.python.org/pep-0318/) for the full specification. "
-            "Happy decorating!\n"
-        )
-
-        pos = 0
-        renderer = _StreamingRenderer() if not raw else None
-
-        while pos < len(response):
-            chunk_size = rng.randint(chunk_min, chunk_max)
-            chunk = response[pos : pos + chunk_size]
-            pos += chunk_size
-
-            if raw:
-                click.echo(chunk, nl=False)
-                click.get_text_stream("stdout").flush()
-            elif renderer is not None:
-                renderer.feed(chunk)
-
-            sleep_s = (delay_ms + rng.randint(-jitter_ms, jitter_ms)) / 1000.0
-            time.sleep(max(0.0, sleep_s))
-
-        if not raw and renderer is not None:
-            renderer.flush()
-
-    # ── tokens ─────────────────────────────────────────
-
-    @fcio.command("tokens")
-    @click.argument("text", nargs=-1, required=True)
-    @click.option("-m", "--model", "model_id", default="gpt-oss:20b", help="Model ID")
-    @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-    @click.pass_context
-    def cmd_tokens(ctx: click.Context, text: tuple[str], model_id: str, as_json: bool) -> None:
-        """Estimate token count for text (if endpoint supports it)"""
-        loc: Location = ctx.obj["location"]
-        key = get_api_key(loc)
-
-        body = {
-            "model": model_id,
-            "messages": [{"role": "user", "content": " ".join(text)}],
-            "max_tokens": 1,
-        }
-
-        try:
-            resp = api_request("POST", "/chat/completions", key, loc.api_base, json_data=body)
-            data = resp.json()
-            usage = data.get("usage", {})
-
-            if as_json:
-                click.echo(json.dumps(usage, indent=2))
-            else:
-                click.echo(f"Model: {model_id}")
-                click.echo(f"Tokens: {usage.get('prompt_tokens', '?')}")
-        except ApiError as e:
-            click.echo(f"⚠️  Token endpoint not supported: {e}", err=True)
-            total_chars = sum(len(t) for t in text)
-            click.echo(f"Rough estimate: ~{total_chars // 4} tokens (heuristic)")
-
-    # ── ingest ─────────────────────────────────────────
-
-    @fcio.command("ingest")
-    @click.argument("collection")
-    @click.argument("paths", nargs=-1, required=True)
-    @click.option(
-        "--glob",
-        "glob_pattern",
-        default="*.md",
-        help="File glob for directory discovery (default: *.md)",
-    )
-    @click.option(
-        "-m",
-        "--model",
-        "model_id",
-        default="bge-m3-567m",
-        help="Embedding model alias (default: bge-m3-567m)",
-    )
-    @click.option(
-        "--chunk-size",
-        type=int,
-        default=30,
-        help="Lines per chunk (default: 30)",
-    )
-    @click.option(
-        "--overlap",
-        type=int,
-        default=5,
-        help="Overlap lines between chunks (default: 5)",
-    )
-    @click.option(
-        "--yes",
-        "skip_confirm",
-        is_flag=True,
-        help="Skip confirmation preview",
-    )
-    @click.pass_context
-    def cmd_ingest(
-        ctx: click.Context,
-        collection: str,
-        paths: tuple[str, ...],
-        glob_pattern: str,
-        model_id: str,
-        chunk_size: int,
-        overlap: int,
-        skip_confirm: bool,
-    ) -> None:
-        """Ingest files into an llm embedding collection.
-
-        COLLECTION is the collection name. PATHS are directories (recursive
-        discovery) or explicit files.
-
-        \b
-        Examples:
-          llm fcio ingest mydocs ./docs/
-          llm fcio ingest mydocs ./docs/ --glob '*.py'
-          llm fcio ingest mydocs file1.md file2.md
-          llm fcio ingest mydocs ./src/ -m bge --chunk-size 50 --overlap 10
-        """
-        resolved_paths = tuple(Path(p) for p in paths)
-        files = _discover_files(resolved_paths, glob_pattern)
-
-        if not files:
-            raise click.ClickException("No files found matching criteria")
-
-        # Build chunk map: {filepath: [(chunk_id, chunk_text), ...]}
-        file_chunks: dict[str, list[tuple[str, str]]] = {}
-        for f in files:
-            text = f.read_text(errors="replace")
-            display_path = str(f)
-            chunks = _chunk_lines(text, display_path, chunk_size, overlap)
-            if chunks:
-                file_chunks[display_path] = chunks
-
-        total_chunks = sum(len(cs) for cs in file_chunks.values())
-
-        if not skip_confirm:
-            click.echo("Files to ingest:")
-            max_name_len = max(len(n) for n in file_chunks)
-            for name, chunks in file_chunks.items():
-                padded = name.ljust(max_name_len)
-                click.echo(f"  {padded}  {len(chunks)} chunks")
-            click.echo(f"Total: {len(file_chunks)} files, {total_chunks} chunks")
-            click.echo()
-            if not click.confirm("Continue", default=False):
-                raise click.ClickException("Aborted")
-
-        # Create collection and embed
-        db = sqlite_utils.Database(llm.user_dir() / "embeddings.db")
-        if llm.Collection.exists(db, collection):
-            col = llm.Collection(collection, db)
+    # ── Section 2: Models ──
+    embed_keywords = ("embed", "bge", "gemma")
+    chat_keywords = ("gpt", "llama", "qwen", "mistral", "chat", "claude", "deepseek")
+    chat_models: list[dict] = []
+    embed_models: list[dict] = []
+    other_models: list[dict] = []
+    for m in models_data:
+        mid = m["id"]
+        if any(k in mid.lower() for k in embed_keywords):
+            embed_models.append(m)
+        elif any(k in mid.lower() for k in chat_keywords):
+            chat_models.append(m)
         else:
-            col = llm.Collection(collection, db=db, model_id=model_id)
-        click.echo(f"Using model: {col.model().model_id}", err=True)
+            other_models.append(m)
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("{task.fields[filename]}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TimeElapsedColumn(),
-            TimeRemainingColumn(),
-        ) as progress:
-            task = progress.add_task(
-                "ingest",
-                total=total_chunks,
-                filename="Starting...",
-            )
+    # ── Section 3: Feature probes ──
+    def _probe_endpoint(
+        method: str,
+        path: str,
+        body: dict | None = None,
+        model_error_marker: str = "model",
+    ) -> str:
+        try:
+            api_request(method, path, key, loc.api_base, json_data=body)
+            return "✅ available"
+        except ApiError as e:
+            if e.status_code and model_error_marker in str(e).lower():
+                return "✅ available"
+            if e.status_code == httpx.codes.UNAUTHORIZED:
+                return "❌ auth failed"
+            return f"❌ {e}"
 
-            def _tracked() -> Iterator[tuple[str, str]]:
-                for name, chunks in file_chunks.items():
-                    fname = Path(name).name
-                    for cid, text in chunks:
-                        progress.update(task, filename=fname)
-                        yield cid, text
-                        progress.advance(task)
+    chat_status = _probe_endpoint(
+        "POST",
+        "/chat/completions",
+        body={"model": "_probe_test", "messages": [{"role": "user", "content": "."}]},
+    )
+    streaming_status = _probe_endpoint(
+        "POST",
+        "/chat/completions",
+        body={
+            "model": "_probe_test",
+            "messages": [{"role": "user", "content": "."}],
+            "stream": True,
+        },
+    )
+    embed_status = _probe_endpoint(
+        "POST",
+        "/embeddings",
+        body={"model": "_probe_test", "input": "test"},
+    )
 
-            col.embed_multi(_tracked(), store=True)
+    # ── Output ──
+    if as_json:
+        payload = {
+            "endpoint": {
+                "name": loc.name,
+                "api_base": loc.api_base,
+                "auth": auth_status,
+            },
+            "models": {
+                "chat": chat_models,
+                "embedding": embed_models,
+                "other": other_models,
+                "counts": {
+                    "chat": len(chat_models),
+                    "embedding": len(embed_models),
+                    "other": len(other_models),
+                    "total": len(models_data),
+                },
+            },
+            "features": {
+                "chat_completions": {
+                    "status": chat_status,
+                    "method": "POST",
+                    "path": "/chat/completions",
+                },
+                "streaming": {
+                    "status": streaming_status,
+                    "method": "POST",
+                    "path": "/chat/completions",
+                    "param": "stream",
+                },
+                "embeddings": {"status": embed_status, "method": "POST", "path": "/embeddings"},
+            },
+        }
+        click.echo(json.dumps(payload, indent=2))
+        return
 
-        click.echo(f"Ingested {total_chunks} chunks into '{collection}'", err=True)
+    # Human-readable output
+    click.echo(f"🔍 FCIO {loc.name.upper()} Capabilities")
+    click.echo("=" * 50)
+    click.echo()
+    click.echo("Endpoint:")
+    click.echo(f"  Name:        {loc.name}")
+    click.echo(f"  API Base:    {loc.api_base}")
+    click.echo(f"  Auth:        {auth_status}")
+    click.echo()
+
+    def _print_models(label: str, models: list[dict]) -> None:
+        click.echo(f"{label} ({len(models)}):")
+        if not models:
+            click.echo("  (none)")
+        for m in models:
+            meta_parts: list[str] = []
+            if owned := m.get("owned_by"):
+                meta_parts.append(f"owned: {owned}")
+            if created := m.get("created"):
+                meta_parts.append(f"created: {created}")
+            meta = f"  [{', '.join(meta_parts)}]" if meta_parts else ""
+            click.echo(f"  - {m['id']}{meta}")
+        click.echo()
+
+    _print_models("Chat Models", chat_models)
+    _print_models("Embedding Models", embed_models)
+    _print_models("Other Models", other_models)
+
+    click.echo("Features:")
+    click.echo(f"  Chat completions:  {chat_status} (POST /chat/completions)")
+    click.echo(f"  Streaming:         {streaming_status} (POST /chat/completions, stream)")
+    click.echo(f"  Embeddings:        {embed_status} (POST /embeddings)")
+
+    # ── simulate ────────────────────────────────────────────
+
+
+@fcio.command("simulate")
+@click.option(
+    "--speed",
+    type=click.Choice(["fast", "normal", "slow"]),
+    default="normal",
+    help="Streaming speed (default: normal)",
+)
+@click.option("--seed", type=int, default=42, help="Random seed for reproducibility")
+@click.option("--raw", is_flag=True, help="Output raw markdown (no Rich rendering)")
+def cmd_simulate(speed: str, seed: int, raw: bool) -> None:
+    """Stream a simulated LLM response with Rich markdown rendering.
+
+    Produces token-by-token markdown output that looks like a real
+    model response. Blocks are rendered as they finalize (paragraph,
+    code fence, list). Use --raw for unformatted pipe output.
+    """
+
+    rng = random.Random(seed)
+
+    speeds = {"fast": (8, 3, 3, 8), "normal": (25, 12, 1, 4), "slow": (60, 25, 1, 2)}
+    delay_ms, jitter_ms, chunk_min, chunk_max = speeds[speed]
+
+    response = (
+        "# Python Decorators\n"
+        "\n"
+        "Decorators are one of Python's most powerful features. They allow you to "
+        "**modify** or *extend* the behavior of callable objects without permanently "
+        "modifying them.\n"
+        "\n"
+        "## Basic Syntax\n"
+        "\n"
+        "A decorator takes a function and returns a modified version:\n"
+        "\n"
+        "```python\n"
+        "def my_decorator(func):\n"
+        "    def wrapper(*args, **kwargs):\n"
+        '        print("Before call")\n'
+        "        result = func(*args, **kwargs)\n"
+        '        print("After call")\n'
+        "        return result\n"
+        "    return wrapper\n"
+        "\n"
+        "@my_decorator\n"
+        "def greet(name):\n"
+        '    print(f"Hello, {name}!")\n'
+        "\n"
+        "greet('World')\n"
+        "```\n"
+        "\n"
+        "## Key Points\n"
+        "\n"
+        "Important things to remember:\n"
+        "\n"
+        "- Decorators accept a function and return a new one\n"
+        "- The `@decorator` syntax is sugar for `func = decorator(func)`\n"
+        "- Use `functools.wraps` to preserve function metadata\n"
+        "- Multiple decorators apply bottom-up\n"
+        "\n"
+        "## Common Use Cases\n"
+        "\n"
+        "| Pattern | Decorator |\n"
+        "|---------|----------|\n"
+        "| Logging | `@log_calls` |\n"
+        "| Caching | `@lru_cache` |\n"
+        "| Auth | `@require_login` |\n"
+        "| Retry | `@retry(n=3)` |\n"
+        "\n"
+        "### Stacking Decorators\n"
+        "\n"
+        "```bash\n"
+        "@decorator_a\n"
+        "@decorator_b\n"
+        "def my_func():\n"
+        "    pass\n"
+        "# Same as: my_func = decorator_a(decorator_b(my_func))\n"
+        "```\n"
+        "\n"
+        "> Decorators are just functions that return functions. "
+        "Once you grasp that, everything else falls into place.\n"
+        "\n"
+        "See [PEP 318](https://peps.python.org/pep-0318/) for the full specification. "
+        "Happy decorating!\n"
+    )
+
+    pos = 0
+    renderer = _StreamingRenderer() if not raw else None
+
+    while pos < len(response):
+        chunk_size = rng.randint(chunk_min, chunk_max)
+        chunk = response[pos : pos + chunk_size]
+        pos += chunk_size
+
+        if raw:
+            click.echo(chunk, nl=False)
+            click.get_text_stream("stdout").flush()
+        elif renderer is not None:
+            renderer.feed(chunk)
+
+        sleep_s = (delay_ms + rng.randint(-jitter_ms, jitter_ms)) / 1000.0
+        time.sleep(max(0.0, sleep_s))
+
+    if not raw and renderer is not None:
+        renderer.flush()
+
+    # ── tokens ─────────────────────────────────────────────
+
+
+@fcio.command("tokens")
+@click.argument("text", nargs=-1, required=True)
+@click.option("-m", "--model", "model_id", default="gpt-oss:20b", help="Model ID")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def cmd_tokens(ctx: click.Context, text: tuple[str], model_id: str, as_json: bool) -> None:
+    """Estimate token count for text (if endpoint supports it)"""
+    loc: Location = ctx.obj["location"]
+    key = get_api_key(loc)
+
+    body = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": " ".join(text)}],
+        "max_tokens": 1,
+    }
+
+    try:
+        resp = api_request("POST", "/chat/completions", key, loc.api_base, json_data=body)
+        data = resp.json()
+        usage = data.get("usage", {})
+
+        if as_json:
+            click.echo(json.dumps(usage, indent=2))
+        else:
+            click.echo(f"Model: {model_id}")
+            click.echo(f"Tokens: {usage.get('prompt_tokens', '?')}")
+    except ApiError as e:
+        click.echo(f"⚠️  Token endpoint not supported: {e}", err=True)
+        total_chars = sum(len(t) for t in text)
+        click.echo(f"Rough estimate: ~{total_chars // 4} tokens (heuristic)")
+
+    # ── ingest ─────────────────────────────────────────────
+
+
+@fcio.command("ingest")
+@click.argument("collection")
+@click.argument("paths", nargs=-1, required=True)
+@click.option(
+    "--glob",
+    "glob_pattern",
+    default="*.md",
+    help="File glob for directory discovery (default: *.md)",
+)
+@click.option(
+    "-m",
+    "--model",
+    "model_id",
+    default="bge-m3-567m",
+    help="Embedding model alias (default: bge-m3-567m)",
+)
+@click.option(
+    "--chunk-size",
+    type=int,
+    default=30,
+    help="Lines per chunk (default: 30)",
+)
+@click.option(
+    "--overlap",
+    type=int,
+    default=5,
+    help="Overlap lines between chunks (default: 5)",
+)
+@click.option(
+    "--yes",
+    "skip_confirm",
+    is_flag=True,
+    help="Skip confirmation preview",
+)
+@click.pass_context
+def cmd_ingest(
+    ctx: click.Context,
+    collection: str,
+    paths: tuple[str, ...],
+    glob_pattern: str,
+    model_id: str,
+    chunk_size: int,
+    overlap: int,
+    skip_confirm: bool,
+) -> None:
+    """Ingest files into an llm embedding collection.
+
+    COLLECTION is the collection name. PATHS are directories (recursive
+    discovery) or explicit files.
+
+    \b
+    Examples:
+      llm fcio ingest mydocs ./docs/
+      llm fcio ingest mydocs ./docs/ --glob '*.py'
+      llm fcio ingest mydocs file1.md file2.md
+      llm fcio ingest mydocs ./src/ -m bge --chunk-size 50 --overlap 10
+    """
+    resolved_paths = tuple(Path(p) for p in paths)
+    files = _discover_files(resolved_paths, glob_pattern)
+
+    if not files:
+        raise click.ClickException("No files found matching criteria")
+
+    # Build chunk map: {filepath: [(chunk_id, chunk_text), ...]}
+    file_chunks: dict[str, list[tuple[str, str]]] = {}
+    for f in files:
+        text = f.read_text(errors="replace")
+        display_path = str(f)
+        chunks = _chunk_lines(text, display_path, chunk_size, overlap)
+        if chunks:
+            file_chunks[display_path] = chunks
+
+    total_chunks = sum(len(cs) for cs in file_chunks.values())
+
+    if not skip_confirm:
+        click.echo("Files to ingest:")
+        max_name_len = max(len(n) for n in file_chunks)
+        for name, chunks in file_chunks.items():
+            padded = name.ljust(max_name_len)
+            click.echo(f"  {padded}  {len(chunks)} chunks")
+        click.echo(f"Total: {len(file_chunks)} files, {total_chunks} chunks")
+        click.echo()
+        if not click.confirm("Continue", default=False):
+            raise click.ClickException("Aborted")
+
+    # Create collection and embed
+    db = sqlite_utils.Database(llm.user_dir() / "embeddings.db")
+    if llm.Collection.exists(db, collection):
+        col = llm.Collection(collection, db)
+    else:
+        col = llm.Collection(collection, db=db, model_id=model_id)
+    click.echo(f"Using model: {col.model().model_id}", err=True)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("{task.fields[filename]}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+    ) as progress:
+        task = progress.add_task(
+            "ingest",
+            total=total_chunks,
+            filename="Starting...",
+        )
+
+        def _tracked() -> Iterator[tuple[str, str]]:
+            for name, chunks in file_chunks.items():
+                fname = Path(name).name
+                for cid, text in chunks:
+                    progress.update(task, filename=fname)
+                    yield cid, text
+                    progress.advance(task)
+
+        col.embed_multi(_tracked(), store=True)
+
+    click.echo(f"Ingested {total_chunks} chunks into '{collection}'", err=True)
+
+
+@llm.hookimpl
+def register_commands(cli: click.Group) -> None:
+    cli.add_command(fcio)
 
 
 # ── Chat Helpers ────────────────────────────────────────
