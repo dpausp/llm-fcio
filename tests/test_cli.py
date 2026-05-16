@@ -300,7 +300,7 @@ def test_capabilities_healthy(runner: CliRunner, cli: click.Group) -> None:
         result = runner.invoke(cli, ["fcio", "capabilities"])
     assert result.exit_code == 0
     assert "FCIO RZOB" in result.output
-    assert "reachable" in result.output
+    assert "✅ available" in result.output
 
 
 @respx.mock

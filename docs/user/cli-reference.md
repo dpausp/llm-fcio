@@ -201,26 +201,6 @@ llm collections delete my-project
 - **Existing collection** — the `-m` flag is ignored. Delete and recreate the collection to change models.
 
 ---
-
-## llm fcio health
-
-Checks API connectivity, authentication, and endpoint availability.
-
-```bash
-llm fcio health
-```
-
-Reports three checks:
-
-- **auth** — whether your API key is valid (tested by fetching the model list)
-- **base_url** — whether the API server is reachable
-- **chat_endpoint** — whether the chat completions endpoint responds
-
-Use this as a first step when troubleshooting.
-
-`--json`
-: Outputs results as JSON.
-
 ---
 
 ## llm fcio capabilities

@@ -52,14 +52,6 @@ llm similar my-project -c "how does error handling work"
 
 See [CLI Reference](cli-reference.md#llm-fcio-ingest) for chunking options and multi-format workflows.
 
-### Check if the API is working
-
-```bash
-llm fcio health
-```
-
-Reports auth status, API reachability, and chat endpoint availability.
-
 ### See available models
 
 ```bash
