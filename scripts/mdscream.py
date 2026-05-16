@@ -29,6 +29,7 @@ from rich.text import Text
 # Block detection
 # ---------------------------------------------------------------------------
 
+
 @dataclass(slots=True)
 class Block:
     kind: str
@@ -62,9 +63,7 @@ class BlockDetector:
             return newly
 
         if stripped.startswith("```"):
-            if self._active.content and any(
-                ln.strip() for ln in self._active.content
-            ):
+            if self._active.content and any(ln.strip() for ln in self._active.content):
                 newly.append(self._active)
             lang = stripped[3:].strip() or None
             self._active = Block(kind="code", language=lang)
@@ -82,9 +81,7 @@ class BlockDetector:
 
     def flush(self) -> list[Block]:
         """Flush the active block if it has content."""
-        if self._active.content and any(
-            ln.strip() for ln in self._active.content
-        ):
+        if self._active.content and any(ln.strip() for ln in self._active.content):
             block = self._active
             self._active = Block(kind="text")
             return [block]
@@ -95,9 +92,11 @@ class BlockDetector:
 # Renderer
 # ---------------------------------------------------------------------------
 
+
 def _detect_width() -> int:
     """Detect terminal width from stdout/stderr (not stdin, which is piped)."""
     import os
+
     for fd in (1, 2, 0):
         try:
             return os.get_terminal_size(fd).columns
@@ -132,7 +131,7 @@ def _render_block(block: Block) -> None:
                 )
                 sys.stdout.flush()
                 return
-            except (ValueError, OSError):
+            except ValueError, OSError:
                 pass
         _console.print(Text(code))
         sys.stdout.flush()
@@ -143,7 +142,7 @@ def _render_block(block: Block) -> None:
         return
     try:
         _console.print(Markdown(text))
-    except (ValueError, OSError):
+    except ValueError, OSError:
         _console.print(Text(text))
     sys.stdout.flush()
 
@@ -152,14 +151,12 @@ def _render_block(block: Block) -> None:
 # Normalization
 # ---------------------------------------------------------------------------
 
+
 def _normalize_cr(text: str) -> str:
     """Keep only text after the last carriage return per line."""
     if "\r" not in text:
         return text
-    return "\n".join(
-        line.split("\r")[-1] if "\r" in line else line
-        for line in text.split("\n")
-    )
+    return "\n".join(line.split("\r")[-1] if "\r" in line else line for line in text.split("\n"))
 
 
 # ---------------------------------------------------------------------------

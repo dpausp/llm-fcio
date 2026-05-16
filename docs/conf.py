@@ -22,7 +22,15 @@ exclude_patterns = ["_build"]
 # -- autoapi ---------------------------------------------------------------
 autoapi_type = "python"
 autoapi_dirs = [".."]
-autoapi_ignore = ["*/.venv/*", "*/build/*", "*/dist/*", "*/egg-info/*", "*/__pycache__/*", "*/.ruff_cache/*", "*/docs/*"]
+autoapi_ignore = [
+    "*/.venv/*",
+    "*/build/*",
+    "*/dist/*",
+    "*/egg-info/*",
+    "*/__pycache__/*",
+    "*/.ruff_cache/*",
+    "*/docs/*",
+]
 autoapi_options = [
     "members",
     "undoc-members",
@@ -58,13 +66,18 @@ llms_txt_build_parallel = True
 llms_txt_full_build = True
 
 
-
-def _skip_member(app: object, what: str, name: str, obj: object, skip: bool, options: object) -> bool | None:
+def _skip_member(
+    app: object, what: str, name: str, obj: object, skip: bool, options: object
+) -> bool | None:
     if name.startswith("_"):
         return True
     if what == "class" and "Test" in name:
         return True
-    if hasattr(obj, "__module__") and obj.__module__ is not None and obj.__module__.startswith("pydantic"):
+    if (
+        hasattr(obj, "__module__")
+        and obj.__module__ is not None
+        and obj.__module__.startswith("pydantic")
+    ):
         return True
     return None
 
@@ -74,6 +87,7 @@ def _strip_pydantic_docstring(app: object, docname: str, source: list[str]) -> N
     if not docname.startswith("autoapi/"):
         return
     import re
+
     # The Options inner class inherits BaseModel's docstring which has
     # indented continuation lines invalid in RST context
     source[0] = re.sub(

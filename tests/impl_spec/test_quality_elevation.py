@@ -1,6 +1,5 @@
 """Contract tests for quality-elevation impl spec."""
 
-
 import inspect
 
 

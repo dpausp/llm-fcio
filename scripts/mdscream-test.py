@@ -120,6 +120,7 @@ That's it. Happy decorating!
 # Streamer
 # ---------------------------------------------------------------------------
 
+
 def stream(
     text: str,
     delay_ms: int = 30,
@@ -151,9 +152,7 @@ def stream(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Produce streaming markdown for mdscream testing"
-    )
+    parser = argparse.ArgumentParser(description="Produce streaming markdown for mdscream testing")
     parser.add_argument(
         "--fast",
         action="store_true",

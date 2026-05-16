@@ -147,9 +147,7 @@ def test_api_request_get_success(mocked_api: MockRouter, api_key: str) -> None:
 
 def test_api_request_sends_bearer_auth(mocked_api: MockRouter, api_key: str) -> None:
     """Request includes Authorization: Bearer header."""
-    route = mocked_api.get(f"{API_BASE}/models").mock(
-        return_value=httpx.Response(200, json={})
-    )
+    route = mocked_api.get(f"{API_BASE}/models").mock(return_value=httpx.Response(200, json={}))
     api_request("GET", "/models", api_key, API_BASE)
     request = route.calls[0].request
     assert request.headers["Authorization"] == f"Bearer {api_key}"
@@ -179,32 +177,22 @@ def test_api_request_401_raises_api_error(mocked_api: MockRouter, api_key: str) 
 def test_api_request_nested_error_message(mocked_api: MockRouter, api_key: str) -> None:
     """Extracts message from nested error.message structure."""
     mocked_api.post(f"{API_BASE}/chat/completions").mock(
-        return_value=httpx.Response(
-            400, json={"error": {"message": "model not found"}}
-        )
+        return_value=httpx.Response(400, json={"error": {"message": "model not found"}})
     )
     with pytest.raises(ApiError, match="model not found"):
         api_request("POST", "/chat/completions", api_key, API_BASE, json_data={})
 
 
-def test_api_request_path_without_leading_slash(
-    mocked_api: MockRouter, api_key: str
-) -> None:
+def test_api_request_path_without_leading_slash(mocked_api: MockRouter, api_key: str) -> None:
     """Path without leading slash produces correct URL."""
-    route = mocked_api.get(f"{API_BASE}/models").mock(
-        return_value=httpx.Response(200, json={})
-    )
+    route = mocked_api.get(f"{API_BASE}/models").mock(return_value=httpx.Response(200, json={}))
     api_request("GET", "models", api_key, API_BASE)
     assert route.called
 
 
-def test_api_request_forwards_query_params(
-    mocked_api: MockRouter, api_key: str
-) -> None:
+def test_api_request_forwards_query_params(mocked_api: MockRouter, api_key: str) -> None:
     """Query parameters appear in the request URL."""
-    route = mocked_api.get(f"{API_BASE}/models").mock(
-        return_value=httpx.Response(200, json={})
-    )
+    route = mocked_api.get(f"{API_BASE}/models").mock(return_value=httpx.Response(200, json={}))
     api_request("GET", "/models", api_key, API_BASE, params={"limit": 10})
     assert "limit=10" in str(route.calls[0].request.url)
 
@@ -219,13 +207,9 @@ def test_api_request_500_raises_api_error(mocked_api: MockRouter, api_key: str) 
     assert exc_info.value.status_code == 500
 
 
-def test_api_request_content_type_json(
-    mocked_api: MockRouter, api_key: str
-) -> None:
+def test_api_request_content_type_json(mocked_api: MockRouter, api_key: str) -> None:
     """Request includes Content-Type: application/json."""
-    route = mocked_api.get(f"{API_BASE}/models").mock(
-        return_value=httpx.Response(200, json={})
-    )
+    route = mocked_api.get(f"{API_BASE}/models").mock(return_value=httpx.Response(200, json={}))
     api_request("GET", "/models", api_key, API_BASE)
     assert route.calls[0].request.headers["Content-Type"] == "application/json"
 
@@ -235,11 +219,13 @@ def test_api_request_content_type_json(
 
 def test_iter_sse_yields_content_deltas(api_key: str) -> None:
     """SSE stream yields content deltas in order."""
-    payload = _sse_stream([
-        '{"choices":[{"delta":{"content":"Hello"}}]}',
-        '{"choices":[{"delta":{"content":" world"}}]}',
-        "[DONE]",
-    ])
+    payload = _sse_stream(
+        [
+            '{"choices":[{"delta":{"content":"Hello"}}]}',
+            '{"choices":[{"delta":{"content":" world"}}]}',
+            "[DONE]",
+        ]
+    )
     with respx.mock:
         respx.post(f"{API_BASE}/chat/completions").mock(
             return_value=httpx.Response(
@@ -262,10 +248,12 @@ def test_iter_sse_yields_content_deltas(api_key: str) -> None:
 
 def test_iter_sse_done_sentinel_skipped(api_key: str) -> None:
     """[DONE] sentinel produces no output."""
-    payload = _sse_stream([
-        '{"choices":[{"delta":{"content":"Hi"}}]}',
-        "[DONE]",
-    ])
+    payload = _sse_stream(
+        [
+            '{"choices":[{"delta":{"content":"Hi"}}]}',
+            "[DONE]",
+        ]
+    )
     with respx.mock:
         respx.post(f"{API_BASE}/chat/completions").mock(
             return_value=httpx.Response(
@@ -288,11 +276,13 @@ def test_iter_sse_done_sentinel_skipped(api_key: str) -> None:
 
 def test_iter_sse_empty_choices_skipped(api_key: str) -> None:
     """Events with empty choices list are skipped."""
-    payload = _sse_stream([
-        '{"choices":[]}',
-        '{"choices":[{"delta":{"content":"data"}}]}',
-        "[DONE]",
-    ])
+    payload = _sse_stream(
+        [
+            '{"choices":[]}',
+            '{"choices":[{"delta":{"content":"data"}}]}',
+            "[DONE]",
+        ]
+    )
     with respx.mock:
         respx.post(f"{API_BASE}/chat/completions").mock(
             return_value=httpx.Response(
@@ -315,11 +305,13 @@ def test_iter_sse_empty_choices_skipped(api_key: str) -> None:
 
 def test_iter_sse_malformed_json_skipped(api_key: str) -> None:
     """Malformed JSON in SSE event is silently skipped."""
-    payload = _sse_stream([
-        "{bad json}",
-        '{"choices":[{"delta":{"content":"ok"}}]}',
-        "[DONE]",
-    ])
+    payload = _sse_stream(
+        [
+            "{bad json}",
+            '{"choices":[{"delta":{"content":"ok"}}]}',
+            "[DONE]",
+        ]
+    )
     with respx.mock:
         respx.post(f"{API_BASE}/chat/completions").mock(
             return_value=httpx.Response(
@@ -342,11 +334,13 @@ def test_iter_sse_malformed_json_skipped(api_key: str) -> None:
 
 def test_iter_sse_delta_without_content_skipped(api_key: str) -> None:
     """Delta with no content field is skipped."""
-    payload = _sse_stream([
-        '{"choices":[{"delta":{"role":"assistant"}}]}',
-        '{"choices":[{"delta":{"content":"yes"}}]}',
-        "[DONE]",
-    ])
+    payload = _sse_stream(
+        [
+            '{"choices":[{"delta":{"role":"assistant"}}]}',
+            '{"choices":[{"delta":{"content":"yes"}}]}',
+            "[DONE]",
+        ]
+    )
     with respx.mock:
         respx.post(f"{API_BASE}/chat/completions").mock(
             return_value=httpx.Response(
@@ -369,11 +363,13 @@ def test_iter_sse_delta_without_content_skipped(api_key: str) -> None:
 
 def test_iter_sse_empty_delta_content_skipped(api_key: str) -> None:
     """Delta with empty-string content is skipped (falsy check)."""
-    payload = _sse_stream([
-        '{"choices":[{"delta":{"content":""}}]}',
-        '{"choices":[{"delta":{"content":"real"}}]}',
-        "[DONE]",
-    ])
+    payload = _sse_stream(
+        [
+            '{"choices":[{"delta":{"content":""}}]}',
+            '{"choices":[{"delta":{"content":"real"}}]}',
+            "[DONE]",
+        ]
+    )
     with respx.mock:
         respx.post(f"{API_BASE}/chat/completions").mock(
             return_value=httpx.Response(
@@ -397,29 +393,23 @@ def test_iter_sse_empty_delta_content_skipped(api_key: str) -> None:
 # ── _resolve_model ────────────────────────────────────────────
 
 
-def test_resolve_model_exact_match(
-    mocked_api: MockRouter, api_key: str, no_fzf: None
-) -> None:
+def test_resolve_model_exact_match(mocked_api: MockRouter, api_key: str, no_fzf: None) -> None:
     """Exact model ID is returned without needing fuzzy matching."""
     mocked_api.get(f"{API_BASE}/models").mock(
         return_value=httpx.Response(
             200, json={"data": [{"id": "gpt-oss:20b"}, {"id": "gpt-oss:120b"}]}
         )
     )
-    result = _resolve_model("gpt-oss:20b", api_key, API_BASE)  # type: ignore[attr-defined]
+    result = _resolve_model("gpt-oss:20b", api_key, API_BASE)
     assert result == "gpt-oss:20b"
 
 
-def test_resolve_model_substring_match(
-    mocked_api: MockRouter, api_key: str, no_fzf: None
-) -> None:
+def test_resolve_model_substring_match(mocked_api: MockRouter, api_key: str, no_fzf: None) -> None:
     """Unique substring match resolves to the correct model."""
     mocked_api.get(f"{API_BASE}/models").mock(
-        return_value=httpx.Response(
-            200, json={"data": [{"id": "gpt-oss:20b"}]}
-        )
+        return_value=httpx.Response(200, json={"data": [{"id": "gpt-oss:20b"}]})
     )
-    result = _resolve_model("oss", api_key, API_BASE)  # type: ignore[attr-defined]
+    result = _resolve_model("oss", api_key, API_BASE)
     assert result == "gpt-oss:20b"
 
 
@@ -433,7 +423,7 @@ def test_resolve_model_ambiguous_raises_model_error(
         )
     )
     with pytest.raises(ModelError, match="Ambiguous"):
-        _resolve_model("oss", api_key, API_BASE)  # type: ignore[attr-defined]
+        _resolve_model("oss", api_key, API_BASE)
 
 
 def test_resolve_model_unknown_raises_model_error(
@@ -441,12 +431,10 @@ def test_resolve_model_unknown_raises_model_error(
 ) -> None:
     """No match at all raises ModelError listing available models."""
     mocked_api.get(f"{API_BASE}/models").mock(
-        return_value=httpx.Response(
-            200, json={"data": [{"id": "gpt-oss:20b"}]}
-        )
+        return_value=httpx.Response(200, json={"data": [{"id": "gpt-oss:20b"}]})
     )
     with pytest.raises(ModelError, match="Unknown model"):
-        _resolve_model("nonexistent", api_key, API_BASE)  # type: ignore[attr-defined]
+        _resolve_model("nonexistent", api_key, API_BASE)
 
 
 # ── RzobModel.execute ─────────────────────────────────────────
@@ -469,11 +457,7 @@ def test_execute_non_streaming(
             },
         )
     )
-    chunks = list(
-        rzob_model.execute(
-            simple_prompt, False, simple_response, None, api_key
-        )
-    )
+    chunks = list(rzob_model.execute(simple_prompt, False, simple_response, None, api_key))
     assert chunks == ["Hello there!"]
     assert simple_response.response_json is not None
 
@@ -486,11 +470,13 @@ def test_execute_streaming(
     api_key: str,
 ) -> None:
     """Streaming execute yields content deltas via SSE."""
-    payload = _sse_stream([
-        '{"choices":[{"delta":{"content":"Hi"}}]}',
-        '{"choices":[{"delta":{"content":" there"}}]}',
-        "[DONE]",
-    ])
+    payload = _sse_stream(
+        [
+            '{"choices":[{"delta":{"content":"Hi"}}]}',
+            '{"choices":[{"delta":{"content":" there"}}]}',
+            "[DONE]",
+        ]
+    )
     mocked_api.post(f"{API_BASE}/chat/completions").mock(
         return_value=httpx.Response(
             200,
@@ -498,11 +484,7 @@ def test_execute_streaming(
             headers={"Content-Type": "text/event-stream"},
         )
     )
-    chunks = list(
-        rzob_model.execute(
-            simple_prompt, True, simple_response, None, api_key
-        )
-    )
+    chunks = list(rzob_model.execute(simple_prompt, True, simple_response, None, api_key))
     assert chunks == ["Hi", " there"]
 
 
@@ -518,11 +500,7 @@ def test_execute_empty_choices_raises_api_error(
         return_value=httpx.Response(200, json={"choices": []})
     )
     with pytest.raises(ApiError, match="Empty response"):
-        list(
-            rzob_model.execute(
-                simple_prompt, False, simple_response, None, api_key
-            )
-        )
+        list(rzob_model.execute(simple_prompt, False, simple_response, None, api_key))
 
 
 def test_execute_with_options(
@@ -533,9 +511,7 @@ def test_execute_with_options(
 ) -> None:
     """Options (temperature, max_tokens) are forwarded in the request body."""
     route = mocked_api.post(f"{API_BASE}/chat/completions").mock(
-        return_value=httpx.Response(
-            200, json={"choices": [{"message": {"content": "ok"}}]}
-        )
+        return_value=httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
     )
     prompt = llm.Prompt(
         "test",
@@ -543,9 +519,7 @@ def test_execute_with_options(
         system="You are a test assistant",
         options=RzobModel.Options(temperature=0.5, max_tokens=100),
     )
-    list(
-        rzob_model.execute(prompt, False, simple_response, None, api_key)
-    )
+    list(rzob_model.execute(prompt, False, simple_response, None, api_key))
     body = json.loads(route.calls[0].request.content)
     assert body["temperature"] == 0.5
     assert body["max_tokens"] == 100
@@ -561,9 +535,7 @@ def test_embed_batch_single_text(
 ) -> None:
     """Embedding a single text returns one embedding vector."""
     mocked_api.post(f"{API_BASE}/embeddings").mock(
-        return_value=httpx.Response(
-            200, json={"data": [{"embedding": [0.1, 0.2, 0.3]}]}
-        )
+        return_value=httpx.Response(200, json={"data": [{"embedding": [0.1, 0.2, 0.3]}]})
     )
     results = list(embed_model.embed_batch(iter(["hello"])))
     assert len(results) == 1
@@ -596,9 +568,7 @@ def test_embed_batch_sends_model_and_input(
 ) -> None:
     """Embedding request includes model ID and input texts."""
     route = mocked_api.post(f"{API_BASE}/embeddings").mock(
-        return_value=httpx.Response(
-            200, json={"data": [{"embedding": [0.1]}]}
-        )
+        return_value=httpx.Response(200, json={"data": [{"embedding": [0.1]}]})
     )
     list(embed_model.embed_batch(iter(["test input"])))
     body = json.loads(route.calls[0].request.content)
@@ -609,14 +579,12 @@ def test_embed_batch_sends_model_and_input(
 # ── register_models ───────────────────────────────────────────
 
 
-def test_register_models_from_cache(
-    cached_models: list[dict], user_dir: Path
-) -> None:
+def test_register_models_from_cache(cached_models: list[dict], user_dir: Path) -> None:
     """register_models registers all cached models."""
     registered: list[object] = []
     register_models(lambda m, **kw: registered.append(m))
     assert len(registered) > 0
-    model_ids = [m.model_id for m in registered]  # type: ignore[union-attr]
+    model_ids = [m.model_id for m in registered]
     assert "fcio-rzob/gpt-oss-20b" in model_ids
 
 
@@ -627,26 +595,22 @@ def test_register_models_empty_cache(user_dir: Path) -> None:
     assert registered == []
 
 
-def test_register_models_includes_aliases(
-    cached_models: list[dict], user_dir: Path
-) -> None:
+def test_register_models_includes_aliases(cached_models: list[dict], user_dir: Path) -> None:
     """Registered models have safe_id aliases set."""
     registered: list[object] = []
     register_models(lambda m, **kw: registered.append(m))
     first = registered[0]
-    assert first.model_id == "fcio-rzob/gpt-oss-20b"  # type: ignore[union-attr]
+    assert first.model_id == "fcio-rzob/gpt-oss-20b"
 
 
 # ── register_embedding_models ─────────────────────────────────
 
 
-def test_register_embedding_models_filters(
-    cached_models: list[dict], user_dir: Path
-) -> None:
+def test_register_embedding_models_filters(cached_models: list[dict], user_dir: Path) -> None:
     """register_embedding_models only registers models with embed keywords."""
     registered: list[object] = []
     register_embedding_models(lambda m, **kw: registered.append(m))
-    model_ids = [m.model_id for m in registered]  # type: ignore[union-attr]
+    model_ids = [m.model_id for m in registered]
     # bge-m3 and Nomic-embed-text have embed keywords
     assert any("bge" in mid for mid in model_ids)
     # gpt-oss models should NOT be registered as embedding models
@@ -663,9 +627,7 @@ def test_register_embedding_models_empty_cache(user_dir: Path) -> None:
 # ── _load_models ──────────────────────────────────────────────
 
 
-def test_load_models_from_cache(
-    cached_models: list[dict], user_dir: Path
-) -> None:
+def test_load_models_from_cache(cached_models: list[dict], user_dir: Path) -> None:
     """_load_models reads models from cache file."""
     models = _load_models("rzob")
     assert len(models) == 4

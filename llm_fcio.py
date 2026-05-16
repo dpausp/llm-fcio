@@ -93,7 +93,9 @@ def get_api_key(loc: Location) -> str:
     return key
 
 
-def _make_client(*, verbose: bool = False, debug: bool = False, timeout: float = 30.0) -> httpx.Client:
+def _make_client(
+    *, verbose: bool = False, debug: bool = False, timeout: float = 30.0
+) -> httpx.Client:
     """Create httpx.Client with optional verbose logging and/or debug header."""
     if not verbose and not debug:
         return httpx.Client(timeout=timeout)
@@ -104,7 +106,9 @@ def _make_client(*, verbose: bool = False, debug: bool = False, timeout: float =
         if debug_id:
             request.headers["X-Skvaider-Debug-ID"] = debug_id
         if verbose:
-            _debug_console.print(f"[bold blue]\u2192[/bold blue] {request.method} {request.url.path}")
+            _debug_console.print(
+                f"[bold blue]\u2192[/bold blue] {request.method} {request.url.path}"
+            )
             for name, value in request.headers.items():
                 if name.lower() == "authorization":
                     value = "Bearer sk-***..."
@@ -113,7 +117,9 @@ def _make_client(*, verbose: bool = False, debug: bool = False, timeout: float =
                 try:
                     body = json.loads(request.content)
                     pretty = json.dumps(body, indent=2)
-                    _debug_console.print(Syntax(pretty, "json", theme="monokai", line_numbers=False))
+                    _debug_console.print(
+                        Syntax(pretty, "json", theme="monokai", line_numbers=False)
+                    )
                 except json.JSONDecodeError, UnicodeDecodeError:
                     raw = request.content.decode("utf-8", errors="replace")
                     if len(raw) > 500:
@@ -140,7 +146,9 @@ def _make_client(*, verbose: bool = False, debug: bool = False, timeout: float =
                     pretty = json.dumps(body_json, indent=2)
                     if len(pretty) > 2000:
                         pretty = pretty[:2000] + "\n... (truncated)"
-                    _debug_console.print(Syntax(pretty, "json", theme="monokai", line_numbers=False))
+                    _debug_console.print(
+                        Syntax(pretty, "json", theme="monokai", line_numbers=False)
+                    )
                 except json.JSONDecodeError, UnicodeDecodeError:
                     if len(body_text) > 500:
                         body_text = body_text[:500] + "... (truncated)"

@@ -307,3 +307,36 @@ Full CLI test not triggered — existing E2E evidence sufficient. Synthesis deci
 ## Raw Data Location
 
 .agents/tmp/quality/ — inventory/, baseline/, extreme/, analysis/, e2e/
+
+## Tidy Session — 2026-05-16
+
+### Mock Hardening
+- Bare mocks before: 3 → after: 3
+- Migrated to typed: 0 (llm.Collection is itself a Mock at import time — spec= impossible for plugin-based systems)
+- Untouchable: 3 (added explanatory comments)
+
+### Suppression Cleanup
+- Linter suppressions removed: 0 (3 noqa BLE001 all still needed)
+- Type-check suppressions removed: 7 (dead mypy-format type:ignore in ty-based project)
+- Test skips removed: 0 (1 skip is legitimate)
+- Restored (still needed): 0
+
+### Class-Based Test Conversion
+- Classes before: 13 → after: 0
+- Methods converted to plain functions: 37
+- File: tests/test_pure_functions.py
+
+### Post-Tidy Gates
+| Tool | Before | After |
+|------|--------|-------|
+| ruff check | 0 issues | 0 issues |
+| ruff format | clean | clean |
+| ty | 1 error (shortuuid) | 1 error (shortuuid) |
+| pytest | 108 passed, 1 skipped | 108 passed, 1 skipped |
+| coverage | 78% | 78% |
+
+### Skipped (Not Mechanical)
+- register_commands CC=142 extraction — needs architectural decision
+- Coverage 78% → 90% — needs test priority decision
+- Task runner (doit/tox) — infrastructure decision
+- E2E live API test — needs --run-live marker design

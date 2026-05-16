@@ -82,12 +82,14 @@ def _setup_capabilities_routes() -> None:
     respx.get(BASE_URL).mock(return_value=httpx.Response(200))
     respx.post(CHAT_URL).mock(
         return_value=httpx.Response(
-            400, json={"error": {"message": "model not found"}},
+            400,
+            json={"error": {"message": "model not found"}},
         ),
     )
     respx.post(EMBED_URL).mock(
         return_value=httpx.Response(
-            400, json={"error": {"message": "model not found"}},
+            400,
+            json={"error": {"message": "model not found"}},
         ),
     )
 
@@ -126,7 +128,9 @@ def test_refresh_api_error(runner: CliRunner, cli: click.Group, tmp_path: Path) 
 
 @respx.mock
 def test_refresh_empty_response(
-    runner: CliRunner, cli: click.Group, tmp_path: Path,
+    runner: CliRunner,
+    cli: click.Group,
+    tmp_path: Path,
 ) -> None:
     cache_file = tmp_path / "models.json"
     with (
@@ -208,7 +212,8 @@ def test_chat_with_model_option(runner: CliRunner, cli: click.Group) -> None:
         _setup_models_route()
         _setup_chat_route("Response from 120b")
         result = runner.invoke(
-            cli, ["fcio", "chat", "--no-stream", "-m", "gpt-oss:120b", "test"],
+            cli,
+            ["fcio", "chat", "--no-stream", "-m", "gpt-oss:120b", "test"],
         )
     assert result.exit_code == 0
     assert "Response from 120b" in result.output
@@ -321,7 +326,9 @@ def test_capabilities_json_output(runner: CliRunner, cli: click.Group) -> None:
 
 @patch("llm_fcio.time.sleep")
 def test_simulate_raw(
-    mock_sleep: MagicMock, runner: CliRunner, cli: click.Group,
+    mock_sleep: MagicMock,
+    runner: CliRunner,
+    cli: click.Group,
 ) -> None:
     result = runner.invoke(cli, ["fcio", "simulate", "--raw"])
     assert result.exit_code == 0
@@ -332,7 +339,9 @@ def test_simulate_raw(
 
 @patch("llm_fcio.time.sleep")
 def test_simulate_default(
-    mock_sleep: MagicMock, runner: CliRunner, cli: click.Group,
+    mock_sleep: MagicMock,
+    runner: CliRunner,
+    cli: click.Group,
 ) -> None:
     result = runner.invoke(cli, ["fcio", "simulate"])
     assert result.exit_code == 0
@@ -341,7 +350,9 @@ def test_simulate_default(
 
 @patch("llm_fcio.time.sleep")
 def test_simulate_fast_speed(
-    mock_sleep: MagicMock, runner: CliRunner, cli: click.Group,
+    mock_sleep: MagicMock,
+    runner: CliRunner,
+    cli: click.Group,
 ) -> None:
     result = runner.invoke(cli, ["fcio", "simulate", "--speed", "fast", "--raw"])
     assert result.exit_code == 0
@@ -414,7 +425,9 @@ def test_tokens_api_error_fallback(runner: CliRunner, cli: click.Group) -> None:
 
 
 def test_ingest_no_files_found(
-    runner: CliRunner, cli: click.Group, tmp_path: Path,
+    runner: CliRunner,
+    cli: click.Group,
+    tmp_path: Path,
 ) -> None:
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
@@ -424,7 +437,9 @@ def test_ingest_no_files_found(
 
 
 def test_ingest_path_not_found(
-    runner: CliRunner, cli: click.Group, tmp_path: Path,
+    runner: CliRunner,
+    cli: click.Group,
+    tmp_path: Path,
 ) -> None:
     missing = tmp_path / "nonexistent"
     result = runner.invoke(cli, ["fcio", "ingest", "testcol", str(missing), "--yes"])
@@ -442,6 +457,7 @@ def test_ingest_single_file(
     tmp_path: Path,
 ) -> None:
     mock_user_dir.return_value = tmp_path
+    # Cannot use spec=llm.Collection: llm is plugin-based, Collection resolves to MagicMock at import → InvalidSpecError
     mock_col = MagicMock()
     mock_col.model.return_value.model_id = "bge-m3-567m"
     mock_collection_cls.exists.return_value = False
@@ -466,6 +482,7 @@ def test_ingest_multiple_files(
     tmp_path: Path,
 ) -> None:
     mock_user_dir.return_value = tmp_path
+    # Cannot use spec=llm.Collection: llm is plugin-based, Collection resolves to MagicMock at import → InvalidSpecError
     mock_col = MagicMock()
     mock_col.model.return_value.model_id = "bge-m3-567m"
     mock_collection_cls.exists.return_value = False
@@ -477,7 +494,8 @@ def test_ingest_multiple_files(
     doc2.write_text("File B content")
 
     result = runner.invoke(
-        cli, ["fcio", "ingest", "testcol", str(doc1), str(doc2), "--yes"],
+        cli,
+        ["fcio", "ingest", "testcol", str(doc1), str(doc2), "--yes"],
     )
     assert result.exit_code == 0
     assert "Ingested" in result.output
@@ -494,6 +512,7 @@ def test_ingest_chunk_options(
     tmp_path: Path,
 ) -> None:
     mock_user_dir.return_value = tmp_path
+    # Cannot use spec=llm.Collection: llm is plugin-based, Collection resolves to MagicMock at import → InvalidSpecError
     mock_col = MagicMock()
     mock_col.model.return_value.model_id = "bge-m3-567m"
     mock_collection_cls.exists.return_value = False
@@ -506,8 +525,15 @@ def test_ingest_chunk_options(
     result = runner.invoke(
         cli,
         [
-            "fcio", "ingest", "testcol", str(doc),
-            "--yes", "--chunk-size", "10", "--overlap", "2",
+            "fcio",
+            "ingest",
+            "testcol",
+            str(doc),
+            "--yes",
+            "--chunk-size",
+            "10",
+            "--overlap",
+            "2",
         ],
     )
     assert result.exit_code == 0
