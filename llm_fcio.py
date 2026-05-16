@@ -33,6 +33,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 _VERBOSE: bool = False
+_DEBUG: bool = False
 _debug_console = Console(stderr=True, force_terminal=True)
 
 
@@ -92,57 +93,60 @@ def get_api_key(loc: Location) -> str:
     return key
 
 
-def _make_client(*, debug: bool = False, timeout: float = 30.0) -> httpx.Client:
-    """Create httpx.Client with optional debug logging event hooks."""
-    if not debug:
+def _make_client(*, verbose: bool = False, debug: bool = False, timeout: float = 30.0) -> httpx.Client:
+    """Create httpx.Client with optional verbose logging and/or debug header."""
+    if not verbose and not debug:
         return httpx.Client(timeout=timeout)
 
-    debug_id = _generate_debug_id()
+    debug_id = _generate_debug_id() if debug else None
 
     def _on_request(request: httpx.Request) -> None:
-        request.headers["X-Skvaider-Debug-ID"] = debug_id
-        _debug_console.print(f"[bold blue]\u2192[/bold blue] {request.method} {request.url.path}")
-        for name, value in request.headers.items():
-            if name.lower() == "authorization":
-                value = "Bearer sk-***..."
-            _debug_console.print(f"  [dim]{name}:[/dim] {value}")
-        if request.content:
-            try:
-                body = json.loads(request.content)
-                pretty = json.dumps(body, indent=2)
-                _debug_console.print(Syntax(pretty, "json", theme="monokai", line_numbers=False))
-            except json.JSONDecodeError, UnicodeDecodeError:
-                raw = request.content.decode("utf-8", errors="replace")
-                if len(raw) > 500:
-                    raw = raw[:500] + "..."
-                _debug_console.print(raw)
+        if debug_id:
+            request.headers["X-Skvaider-Debug-ID"] = debug_id
+        if verbose:
+            _debug_console.print(f"[bold blue]\u2192[/bold blue] {request.method} {request.url.path}")
+            for name, value in request.headers.items():
+                if name.lower() == "authorization":
+                    value = "Bearer sk-***..."
+                _debug_console.print(f"  [dim]{name}:[/dim] {value}")
+            if request.content:
+                try:
+                    body = json.loads(request.content)
+                    pretty = json.dumps(body, indent=2)
+                    _debug_console.print(Syntax(pretty, "json", theme="monokai", line_numbers=False))
+                except json.JSONDecodeError, UnicodeDecodeError:
+                    raw = request.content.decode("utf-8", errors="replace")
+                    if len(raw) > 500:
+                        raw = raw[:500] + "..."
+                    _debug_console.print(raw)
 
     def _on_response(response: httpx.Response) -> None:
-        _debug_console.print(
-            f"[bold green]\u2190[/bold green] {response.status_code} {response.reason_phrase}"
-        )
-        for name, value in response.headers.items():
-            _debug_console.print(f"  [dim]{name}:[/dim] {value}")
-        ct = response.headers.get("content-type", "")
-        if "text/event-stream" in ct:
-            _debug_console.print("  [dim]Response: SSE stream[/dim]")
-            return
-        try:
-            body_text = response.text
-            if not body_text:
+        if verbose:
+            _debug_console.print(
+                f"[bold green]\u2190[/bold green] {response.status_code} {response.reason_phrase}"
+            )
+            for name, value in response.headers.items():
+                _debug_console.print(f"  [dim]{name}:[/dim] {value}")
+            ct = response.headers.get("content-type", "")
+            if "text/event-stream" in ct:
+                _debug_console.print("  [dim]Response: SSE stream[/dim]")
                 return
             try:
-                body_json = json.loads(body_text)
-                pretty = json.dumps(body_json, indent=2)
-                if len(pretty) > 2000:
-                    pretty = pretty[:2000] + "\n... (truncated)"
-                _debug_console.print(Syntax(pretty, "json", theme="monokai", line_numbers=False))
-            except json.JSONDecodeError, UnicodeDecodeError:
-                if len(body_text) > 500:
-                    body_text = body_text[:500] + "... (truncated)"
-                _debug_console.print(body_text)
-        except Exception:  # noqa: BLE001
-            _debug_console.print("  [dim](body not available)[/dim]")
+                body_text = response.text
+                if not body_text:
+                    return
+                try:
+                    body_json = json.loads(body_text)
+                    pretty = json.dumps(body_json, indent=2)
+                    if len(pretty) > 2000:
+                        pretty = pretty[:2000] + "\n... (truncated)"
+                    _debug_console.print(Syntax(pretty, "json", theme="monokai", line_numbers=False))
+                except json.JSONDecodeError, UnicodeDecodeError:
+                    if len(body_text) > 500:
+                        body_text = body_text[:500] + "... (truncated)"
+                    _debug_console.print(body_text)
+            except Exception:  # noqa: BLE001
+                _debug_console.print("  [dim](body not available)[/dim]")
 
     return httpx.Client(
         timeout=timeout,
@@ -166,7 +170,7 @@ def api_request(
         "Accept": "application/json",
     }
 
-    with _make_client(debug=_VERBOSE, timeout=30.0) as client:
+    with _make_client(verbose=_VERBOSE, debug=_DEBUG, timeout=30.0) as client:
         response = client.request(
             method,
             url,
@@ -377,12 +381,12 @@ class RzobModel(llm.KeyModel):
         api_base = self._location.api_base
         if stream:
             body["stream"] = True
-            with _make_client(debug=_VERBOSE) as client:
+            with _make_client(verbose=_VERBOSE, debug=_DEBUG) as client:
                 url = f"{api_base}/chat/completions"
                 for content in _iter_sse_content(client, url, headers, body):
                     yield content
         else:
-            with _make_client(debug=_VERBOSE) as client:
+            with _make_client(verbose=_VERBOSE, debug=_DEBUG) as client:
                 resp = client.post(
                     f"{api_base}/chat/completions",
                     headers=headers,
@@ -418,7 +422,7 @@ class RzobEmbeddingModel(llm.EmbeddingModel):
     def embed_batch(self, items: Iterable[str | bytes]) -> Iterator[list[float]]:
         key = self.get_key()
         api_base = self._location.api_base
-        with _make_client(debug=_VERBOSE, timeout=30.0) as client:
+        with _make_client(verbose=_VERBOSE, debug=_DEBUG, timeout=30.0) as client:
             resp = client.post(
                 f"{api_base}/embeddings",
                 headers={
@@ -681,13 +685,19 @@ def register_commands(cli: click.Group) -> None:
         is_flag=True,
         help="Log raw HTTP requests/responses",
     )
+    @click.option(
+        "--debug",
+        is_flag=True,
+        help="Enable server-side debug recording",
+    )
     @click.pass_context
-    def fcio(ctx: click.Context, loc_name: str, verbose: bool) -> None:
+    def fcio(ctx: click.Context, loc_name: str, verbose: bool, debug: bool) -> None:
         "Commands for the FCIO AI platform"
         ctx.ensure_object(dict)
         ctx.obj["location"] = LOCATIONS[loc_name]
-        global _VERBOSE
+        global _VERBOSE, _DEBUG
         _VERBOSE = verbose
+        _DEBUG = debug
         if ctx.invoked_subcommand is None:
             click.echo(ctx.get_help())
 
@@ -1033,7 +1043,7 @@ def register_commands(cli: click.Group) -> None:
         health_url = f"{health_base}/health"
 
         try:
-            with _make_client(debug=_VERBOSE, timeout=15.0) as client:
+            with _make_client(verbose=_VERBOSE, debug=_DEBUG, timeout=15.0) as client:
                 resp = client.get(
                     health_url,
                     headers={"Authorization": f"Bearer {key}"},
@@ -1363,7 +1373,7 @@ def _send_chat_request(
         body["stream"] = True
         try:
             renderer = _StreamingRenderer() if render else None
-            with _make_client(debug=_VERBOSE) as client:
+            with _make_client(verbose=_VERBOSE, debug=_DEBUG) as client:
                 url = f"{api_base}/chat/completions"
                 sse_headers = {
                     "Authorization": f"Bearer {key}",
