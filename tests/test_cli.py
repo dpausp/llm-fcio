@@ -193,6 +193,123 @@ def test_models_empty_response(runner: CliRunner, cli: click.Group) -> None:
     assert "Type" in result.output
 
 
+@respx.mock
+def test_models_detail_valid(runner: CliRunner, cli: click.Group) -> None:
+    with patch("llm_fcio.get_api_key", return_value="test-key"):
+        respx.get(f"{API_BASE}/models/test-model").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": {"id": "test-model", "owned_by": "test-org", "created": 12345}},
+            ),
+        )
+        result = runner.invoke(cli, ["fcio", "models", "test-model"])
+    assert result.exit_code == 0
+    assert "Model: test-model" in result.output
+    assert "Owner:  test-org" in result.output
+    assert "12345" in result.output
+
+
+@respx.mock
+def test_models_detail_json(runner: CliRunner, cli: click.Group) -> None:
+    with patch("llm_fcio.get_api_key", return_value="test-key"):
+        respx.get(f"{API_BASE}/models/test-model").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": {"id": "test-model", "owned_by": "test-org", "created": 12345}},
+            ),
+        )
+        result = runner.invoke(cli, ["fcio", "models", "test-model", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["id"] == "test-model"
+    assert data["owned_by"] == "test-org"
+
+
+@respx.mock
+def test_models_detail_not_found(runner: CliRunner, cli: click.Group) -> None:
+    with patch("llm_fcio.get_api_key", return_value="test-key"):
+        respx.get(f"{API_BASE}/models/nonexistent").mock(
+            return_value=httpx.Response(
+                404,
+                json={"detail": "Not found"},
+            ),
+        )
+        result = runner.invoke(cli, ["fcio", "models", "nonexistent"])
+    assert result.exit_code != 0
+    assert "Model not found" in result.output
+
+
+@respx.mock
+def test_models_detail_missing_fields(runner: CliRunner, cli: click.Group) -> None:
+    with patch("llm_fcio.get_api_key", return_value="test-key"):
+        respx.get(f"{API_BASE}/models/minimal").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": {"id": "minimal"}},
+            ),
+        )
+        result = runner.invoke(cli, ["fcio", "models", "minimal"])
+    assert result.exit_code == 0
+    assert "Owner:  unknown" in result.output
+    assert "Created: unknown" in result.output
+
+
+# ── chat --interactive ──────────────────────────────────────
+
+
+@respx.mock
+def test_chat_interactive_one_message(runner: CliRunner, cli: click.Group) -> None:
+    with (
+        patch("llm_fcio.get_api_key", return_value="test-key"),
+        patch("llm_fcio._resolve_model", return_value="gpt-oss:20b"),
+        patch("click.prompt", side_effect=["Hello", EOFError]),
+    ):
+        _setup_chat_route("Interactive reply!")
+        result = runner.invoke(
+            cli,
+            ["fcio", "chat", "--interactive", "--no-stream", "--no-markdown", "-m", "gpt-oss:20b"],
+        )
+    assert result.exit_code == 0
+    assert "Interactive chat with gpt-oss:20b" in result.output
+    assert "Interactive reply!" in result.output
+    assert "Goodbye!" in result.output
+
+
+@respx.mock
+def test_chat_interactive_empty_input_skipped(runner: CliRunner, cli: click.Group) -> None:
+    with (
+        patch("llm_fcio.get_api_key", return_value="test-key"),
+        patch("llm_fcio._resolve_model", return_value="gpt-oss:20b"),
+        patch("click.prompt", side_effect=["", "Hello", EOFError]),
+    ):
+        _setup_chat_route("Reply")
+        result = runner.invoke(
+            cli,
+            ["fcio", "chat", "--interactive", "--no-stream", "--no-markdown", "-m", "gpt-oss:20b"],
+        )
+    assert result.exit_code == 0
+    assert "Reply" in result.output
+    assert "Goodbye!" in result.output
+    assert respx.post(CHAT_URL).call_count == 1
+
+
+@respx.mock
+def test_chat_interactive_immediate_eof(runner: CliRunner, cli: click.Group) -> None:
+    with (
+        patch("llm_fcio.get_api_key", return_value="test-key"),
+        patch("llm_fcio._resolve_model", return_value="gpt-oss:20b"),
+        patch("click.prompt", side_effect=EOFError),
+    ):
+        result = runner.invoke(
+            cli,
+            ["fcio", "chat", "--interactive", "--no-stream", "-m", "gpt-oss:20b"],
+        )
+    assert result.exit_code == 0
+    assert "Interactive chat with gpt-oss:20b" in result.output
+    assert "Goodbye!" in result.output
+    assert respx.post(CHAT_URL).called is False
+
+
 # ── chat ──────────────────────────────────────────────────
 
 
@@ -538,3 +655,111 @@ def test_ingest_chunk_options(
     )
     assert result.exit_code == 0
     assert "Ingested" in result.output
+
+
+# ── _make_client verbose/debug paths ────────────────────
+
+
+@respx.mock
+def test_make_client_verbose_fires_hooks() -> None:
+    """verbose=True client fires request/response hooks without error."""
+    from llm_fcio import _make_client
+
+    route = respx.get("https://api.test.com/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": []}),
+    )
+    client = _make_client(verbose=True, timeout=5.0)
+    try:
+        resp = client.get("https://api.test.com/v1/models")
+        assert resp.status_code == 200
+        assert route.called
+    finally:
+        client.close()
+
+
+@respx.mock
+def test_make_client_debug_sends_header() -> None:
+    """debug=True client sends X-Skvaider-Debug-ID header."""
+    from llm_fcio import _make_client
+
+    route = respx.get("https://api.test.com/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": []}),
+    )
+    client = _make_client(debug=True, timeout=5.0)
+    try:
+        client.get("https://api.test.com/v1/models")
+        request, _ = route.calls.last
+        assert "x-skvaider-debug-id" in request.headers
+        assert request.headers["x-skvaider-debug-id"].startswith("llm-fcio-")
+    finally:
+        client.close()
+
+
+@respx.mock
+def test_make_client_verbose_with_json_body() -> None:
+    """verbose=True handles request with JSON content and JSON response body."""
+    from llm_fcio import _make_client
+
+    route = respx.post("https://api.test.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "Hi"}}]},
+        ),
+    )
+    client = _make_client(verbose=True, timeout=5.0)
+    try:
+        resp = client.post(
+            "https://api.test.com/v1/chat/completions",
+            json={"model": "gpt-oss:20b", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert resp.status_code == 200
+        assert route.called
+    finally:
+        client.close()
+
+
+@respx.mock
+def test_make_client_verbose_sse_response() -> None:
+    """verbose=True handles SSE content-type response without error."""
+    from llm_fcio import _make_client
+
+    sse_body = 'data: {"content": "hello"}\n\n'
+    route = respx.get("https://api.test.com/v1/stream").mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_body.encode(),
+            headers={"content-type": "text/event-stream"},
+        ),
+    )
+    client = _make_client(verbose=True, timeout=5.0)
+    try:
+        resp = client.get("https://api.test.com/v1/stream")
+        assert resp.status_code == 200
+        assert route.called
+    finally:
+        client.close()
+
+
+@respx.mock
+def test_make_client_verbose_and_debug_combined() -> None:
+    """Both verbose=True and debug=True active simultaneously."""
+    from llm_fcio import _make_client
+
+    route = respx.post("https://api.test.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "ok"}}]},
+        ),
+    )
+    client = _make_client(verbose=True, debug=True, timeout=5.0)
+    try:
+        resp = client.post(
+            "https://api.test.com/v1/chat/completions",
+            json={"model": "test", "messages": []},
+        )
+        assert resp.status_code == 200
+        request, _ = route.calls.last
+        assert "x-skvaider-debug-id" in request.headers
+        assert request.headers["x-skvaider-debug-id"].startswith("llm-fcio-")
+    finally:
+        client.close()

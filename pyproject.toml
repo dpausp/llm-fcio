@@ -23,6 +23,8 @@ dev = [
     "pytest>=8.0.0",
     "pytest-cov>=6.0.0",
     "respx>=0.23.1",
+    "tox>=4.0.0",
+    "tox-uv>=0.0.1",
 ]
 
 [tool.pytest.ini_options]
@@ -42,3 +44,31 @@ ignore = ["E501", "TC003"]
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.tox]
+env_list = ["lint", "type", "cov"]
+
+[tool.tox.env_run_base]
+runner = "uv-venv-lock-runner"
+dependency_groups = ["dev"]
+
+[tool.tox.env.lint]
+description = "Run ruff linter and format check"
+skip_install = true
+commands = [
+  ["ruff", "check", "."],
+  ["ruff", "format", "--check", "."],
+]
+
+[tool.tox.env.type]
+description = "Run ty type checker"
+skip_install = true
+commands = [
+  ["ty", "check", "llm_fcio.py"],
+]
+
+[tool.tox.env.cov]
+description = "Run tests with coverage"
+commands = [
+  ["pytest"],
+]
