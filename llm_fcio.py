@@ -1029,58 +1029,6 @@ def register_commands(cli: click.Group) -> None:
         click.echo(f"  Streaming:         {streaming_status} (POST /chat/completions, stream)")
         click.echo(f"  Embeddings:        {embed_status} (POST /embeddings)")
 
-    # ── health ──────────────────────────────────────────
-
-    @fcio.command("health")
-    @click.option("--json", "as_json", is_flag=True, help="Output raw JSON")
-    @click.pass_context
-    def cmd_health(ctx: click.Context, as_json: bool) -> None:
-        """Check health of the FCIO AI platform"""
-        loc: Location = ctx.obj["location"]
-        key = get_api_key(loc)
-
-        health_base = loc.api_base.removesuffix("/openai/v1")
-        health_url = f"{health_base}/health"
-
-        try:
-            with _make_client(verbose=_VERBOSE, debug=_DEBUG, timeout=15.0) as client:
-                resp = client.get(
-                    health_url,
-                    headers={"Authorization": f"Bearer {key}"},
-                )
-            if resp.status_code == 404:
-                click.echo(f"\u26a0\ufe0f  Health endpoint not available at {health_url}")
-                click.echo("   The admin router may not be mounted for this location.")
-                return
-            resp.raise_for_status()
-            data = resp.json()
-        except httpx.HTTPError as e:
-            raise click.ClickException(f"Health check failed: {e}") from e
-
-        if as_json:
-            click.echo(json.dumps(data, indent=2))
-            return
-
-        overall = data.get("status", "unknown")
-        icon_map = {"ok": "\u2705", "warning": "\u26a0\ufe0f", "critical": "\u274c"}
-        overall_icon = icon_map.get(overall, "?")
-
-        click.echo(f"FCIO {loc.name.upper()} Health")
-        click.echo("=" * 40)
-        click.echo(f"Status: {overall_icon} {overall}")
-        click.echo()
-
-        checks = data.get("checks", {})
-        if checks:
-            click.echo("Checks:")
-            max_name_len = max(len(n) for n in checks)
-            for name, check in checks.items():
-                cstatus = check.get("status", "unknown")
-                cmsg = check.get("message", "")
-                cicon = icon_map.get(cstatus, "?")
-                padded = name.ljust(max_name_len)
-                click.echo(f"  {cicon} {padded}  {cmsg}")
-
     # ── simulate ────────────────────────────────────────
 
     @fcio.command("simulate")
