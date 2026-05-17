@@ -336,6 +336,50 @@ Full CLI test not triggered — existing E2E evidence sufficient. Synthesis deci
 | coverage | 78% | 78% |
 
 ### Skipped (Not Mechanical)
+- register_commands CC=142 extraction — DONE (commit 935cf21, 9 commands extracted to module level, CC 142→1)
+- Coverage 78% → 90% — DONE (commit 3a3dc42, 12 new tests, 108→120, coverage 78%→86%→91%)
+- Task runner (doit/tox) — DONE (commit 3a3dc42, tox with lint/type/cov environments)
+- E2E live API test — DONE (--run-live pytest marker + test_live.py)
+
+## Implementation Session — 2026-05-17
+
+### register_commands CC Reduction (commit 935cf21)
+- Cyclomatic complexity: 142 → 1
+- 9 CLI commands extracted from register_commands closure to module-level decorators
+- Commands: fcio, refresh, cmd_models, cmd_chat, cmd_embed, cmd_capabilities, cmd_simulate, cmd_tokens, cmd_ingest
+
+### Coverage Tests (commit 3a3dc42)
+- 12 new tests added (108 → 120)
+- Coverage: 78% → 86%
+- New tests for: model detail view, interactive chat, verbose/debug client hooks, JSON output paths
+
+### Tox Task Runner (commit 3a3dc42)
+- tox.ini with lint/type/cov environments
+- Single-command quality gate: `tox`
+
+### Live Marker (--run-live)
+- pytest_configure registers "live" marker
+- pytest_addoption adds --run-live CLI flag
+- pytest_collection_modifyitems skips live tests unless flag passed
+- test_live.py: 2 example tests (register_commands, models API)
+
+### Additional Coverage Tests (this commit)
+- 20 new tests added (120 → 140)
+- Coverage: 86% → 91%
+- Tested: fcio no-subcommand help, chat --system, embed --dimensions, capabilities auth failure,
+  other_models category, models non-404 error, fzf path, missing API key, StreamingRenderer via simulate,
+  streaming renderer, streaming httpx error, chat --json, cache migration, execute with conversation/attachment/options,
+  __str__, short aliases, multi-location aliases
+
+### Post-Session Quality Gates
+
+| Tool | Result |
+|------|--------|
+| ruff check | 0 issues |
+| ruff format | clean |
+| ty | 1 error (shortuuid — pre-existing) |
+| pytest | 140 passed, 3 skipped, 0 failures |
+| coverage | 91% |
 - register_commands CC=142 extraction — needs architectural decision
 - Coverage 78% → 90% — needs test priority decision
 - Task runner (doit/tox) — infrastructure decision

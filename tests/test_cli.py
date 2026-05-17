@@ -763,3 +763,249 @@ def test_make_client_verbose_and_debug_combined() -> None:
         assert request.headers["x-skvaider-debug-id"].startswith("llm-fcio-")
     finally:
         client.close()
+
+
+# ── fcio group no subcommand ──────────────────────────────
+
+
+def test_fcio_no_subcommand_shows_help(runner: CliRunner, cli: click.Group) -> None:
+    """Invoking fcio with no subcommand shows help text."""
+    result = runner.invoke(cli, ["fcio"])
+    assert result.exit_code == 0
+    assert "Commands for the FCIO AI platform" in result.output
+
+
+# ── chat --system ──────────────────────────────────────────
+
+
+@respx.mock
+def test_chat_with_system_prompt(runner: CliRunner, cli: click.Group) -> None:
+    with patch("llm_fcio.get_api_key", return_value="test-key"):
+        _setup_models_route()
+        _setup_chat_route("System test reply")
+        result = runner.invoke(
+            cli,
+            ["fcio", "chat", "--no-stream", "--no-markdown", "-s", "You are helpful", "test"],
+        )
+    assert result.exit_code == 0
+    assert "System test reply" in result.output
+
+
+# ── embed --dimensions ──────────────────────────────────────
+
+
+@respx.mock
+def test_embed_with_dimensions(runner: CliRunner, cli: click.Group) -> None:
+    with patch("llm_fcio.get_api_key", return_value="test-key"):
+        _setup_embed_route(count=1)
+        result = runner.invoke(cli, ["fcio", "embed", "-d", "256", "hello"])
+    assert result.exit_code == 0
+    assert "Text 1:" in result.output
+
+
+# ── capabilities auth error path ──────────────────────────
+
+
+@respx.mock
+def test_capabilities_auth_failure(runner: CliRunner, cli: click.Group) -> None:
+    with patch("llm_fcio.get_api_key", return_value="test-key"):
+        respx.get(MODELS_URL).mock(
+            return_value=httpx.Response(401, json={"detail": "Unauthorized"}),
+        )
+        # Feature probes still run after auth failure
+        respx.post(CHAT_URL).mock(
+            return_value=httpx.Response(401, json={"detail": "Unauthorized"}),
+        )
+        respx.post(EMBED_URL).mock(
+            return_value=httpx.Response(401, json={"detail": "Unauthorized"}),
+        )
+        result = runner.invoke(cli, ["fcio", "capabilities"])
+    assert result.exit_code == 0
+    assert "\u274c" in result.output  # \u274c
+
+
+# ── capabilities with other_models ────────────────────────
+
+
+@respx.mock
+def test_capabilities_other_models_category(runner: CliRunner, cli: click.Group) -> None:
+    with patch("llm_fcio.get_api_key", return_value="test-key"):
+        mixed_models = [
+            {"id": "gpt-oss:20b", "owned_by": "fcio"},
+            {"id": "bge-m3:567m", "owned_by": "fcio"},
+            {"id": "whisper-large:1b", "owned_by": "fcio", "created": 12345},
+        ]
+        respx.get(MODELS_URL).mock(
+            return_value=httpx.Response(200, json={"data": mixed_models}),
+        )
+        respx.get(BASE_URL).mock(return_value=httpx.Response(200))
+        respx.post(CHAT_URL).mock(
+            return_value=httpx.Response(
+                400,
+                json={"error": {"message": "model not found"}},
+            ),
+        )
+        respx.post(EMBED_URL).mock(
+            return_value=httpx.Response(
+                400,
+                json={"error": {"message": "model not found"}},
+            ),
+        )
+        result = runner.invoke(cli, ["fcio", "capabilities"])
+    assert result.exit_code == 0
+    assert "Other Models" in result.output
+    assert "whisper-large:1b" in result.output
+    assert "created: 12345" in result.output
+
+
+# ── models detail re-raise non-404 ApiError ───────────────
+
+
+@respx.mock
+def test_models_detail_server_error(runner: CliRunner, cli: click.Group) -> None:
+    with patch("llm_fcio.get_api_key", return_value="test-key"):
+        respx.get(f"{API_BASE}/models/test-model").mock(
+            return_value=httpx.Response(500, json={"detail": "Internal Server Error"}),
+        )
+        result = runner.invoke(cli, ["fcio", "models", "test-model"])
+    assert result.exit_code != 0
+    assert result.exception is not None
+
+
+# ── _resolve_model fzf path ──────────────────────────────
+
+
+@respx.mock
+def test_resolve_model_fzf_pick(runner: CliRunner, cli: click.Group) -> None:
+    """fzf binary exists and returns a model match."""
+    with (
+        patch("llm_fcio.get_api_key", return_value="test-key"),
+        patch("shutil.which", return_value="/usr/bin/fzf"),
+        patch(
+            "subprocess.run",
+            return_value=MagicMock(stdout="gpt-oss:20b\n"),
+        ),
+    ):
+        _setup_models_route()
+        _setup_chat_route("fzf reply")
+        result = runner.invoke(
+            cli, ["fcio", "chat", "--no-stream", "--no-markdown", "-m", "oss", "hi"]
+        )
+    assert result.exit_code == 0
+    assert "fzf reply" in result.output
+
+
+@respx.mock
+def test_resolve_model_fzf_empty_pick_fallback(runner: CliRunner, cli: click.Group) -> None:
+    """fzf returns empty string → falls through to substring match."""
+    with (
+        patch("llm_fcio.get_api_key", return_value="test-key"),
+        patch("shutil.which", return_value="/usr/bin/fzf"),
+        patch(
+            "subprocess.run",
+            return_value=MagicMock(stdout="\n"),
+        ),
+    ):
+        _setup_models_route()
+        _setup_chat_route("fallback reply")
+        result = runner.invoke(
+            cli,
+            ["fcio", "chat", "--no-stream", "--no-markdown", "-m", "gpt-oss:20b", "hi"],
+        )
+    assert result.exit_code == 0
+    assert "fallback reply" in result.output
+
+
+# ── get_api_key missing key ────────────────────────────────
+
+
+def test_fcio_missing_api_key(runner: CliRunner, cli: click.Group) -> None:
+    """fcio subcommand fails when API key is not set."""
+    with patch(
+        "llm_fcio.get_api_key",
+        side_effect=click.ClickException("API key not found. Set with: llm keys set fcio-rzob"),
+    ):
+        result = runner.invoke(cli, ["fcio", "models"])
+    assert result.exit_code != 0
+    assert "API key not found" in result.output
+
+
+# ── StreamingRenderer edge cases via simulate ─────────────
+
+
+@patch("llm_fcio.time.sleep")
+def test_simulate_with_renderer(mock_sleep: MagicMock, runner: CliRunner, cli: click.Group) -> None:
+    """Simulate with Rich renderer (not --raw) exercises StreamingRenderer.feed/flush."""
+    result = runner.invoke(cli, ["fcio", "simulate", "--speed", "fast"])
+    assert result.exit_code == 0
+    assert len(result.output) > 0
+
+
+# ── chat streaming with renderer via CLI ──────────────────
+
+
+def test_chat_streaming_with_renderer(runner: CliRunner, cli: click.Group) -> None:
+    """Streaming chat with markdown rendering enabled."""
+    with (
+        patch("llm_fcio.get_api_key", return_value="test-key"),
+        patch("llm_fcio._resolve_model", return_value="gpt-oss:20b"),
+        patch("llm_fcio._iter_sse_content", return_value=iter(["Hello", " **world**"])),
+    ):
+        result = runner.invoke(cli, ["fcio", "chat", "Say hello"])
+    assert result.exit_code == 0
+    assert "Hello" in result.output
+
+
+# ── chat streaming httpx error ──────────────────────────────
+
+
+def test_chat_streaming_httpx_error(runner: CliRunner, cli: click.Group) -> None:
+    """Streaming chat with httpx error wraps in ApiError."""
+    with (
+        patch("llm_fcio.get_api_key", return_value="test-key"),
+        patch("llm_fcio._resolve_model", return_value="gpt-oss:20b"),
+        patch("llm_fcio._iter_sse_content", side_effect=httpx.ConnectError("Connection refused")),
+    ):
+        result = runner.invoke(cli, ["fcio", "chat", "test"])
+    assert result.exit_code != 0
+    assert result.exception is not None
+
+
+# ── chat non-streaming as_json ──────────────────────────────
+
+
+@respx.mock
+def test_chat_non_stream_json_output(runner: CliRunner, cli: click.Group) -> None:
+    """Non-streaming chat with --json flag outputs full response."""
+    with patch("llm_fcio.get_api_key", return_value="test-key"):
+        _setup_models_route()
+        respx.post(CHAT_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "Hello!"}}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+                },
+            ),
+        )
+        result = runner.invoke(cli, ["fcio", "chat", "--no-stream", "--json", "test"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "choices" in data
+    assert data["choices"][0]["message"]["content"] == "Hello!"
+
+
+# ── cache migration path ──────────────────────────────────
+
+
+def test_cache_migration_old_to_new(tmp_path: Path) -> None:
+    """Old rzob_models.json is migrated to fcio_models_rzob.json."""
+    old_file = tmp_path / "rzob_models.json"
+    old_file.write_text(json.dumps([{"id": "gpt-oss:20b", "safe_id": "gpt-oss-20b"}]))
+    with patch("llm_fcio.llm.user_dir", return_value=tmp_path):
+        from llm_fcio import _cache_path
+
+        path = _cache_path("rzob")
+    assert path.name == "fcio_models_rzob.json"
+    assert not old_file.exists()
+    assert path.exists()

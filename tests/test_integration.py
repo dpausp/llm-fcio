@@ -647,3 +647,126 @@ def test_load_models_migrates_string_list(user_dir: Path) -> None:
     models = _load_models("rzob")
     assert len(models) == 2
     assert models[0] == {"id": "gpt-oss:20b", "safe_id": "gpt-oss:20b"}
+
+
+# ── execute with conversation ────────────────────────────────
+
+
+def test_execute_with_conversation(
+    mocked_api: MockRouter,
+    rzob_model: RzobModel,
+    simple_response: llm.Response,
+    api_key: str,
+) -> None:
+    """Execute with conversation history includes all messages."""
+    mocked_api.post(f"{API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+    )
+    conv_response = llm.Response(
+        model=rzob_model,
+        prompt=llm.Prompt(
+            "Hello", model=rzob_model, options=RzobModel.Options(), system="prev system"
+        ),
+        stream=False,
+    )
+    conv_response._text = "Hi there"  # ty: ignore[attr-defined]
+    conv = llm.Conversation(responses=[conv_response], model=rzob_model)
+    prompt = llm.Prompt("How are you?", model=rzob_model, options=RzobModel.Options())
+    chunks = list(rzob_model.execute(prompt, False, simple_response, conv, api_key))
+    assert chunks == ["ok"]
+    req_body = json.loads(mocked_api.calls.last.request.content)
+    # Should have system + user + assistant from conversation + user from prompt
+    roles = [m["role"] for m in req_body["messages"]]
+    assert "system" in roles
+    assert "assistant" in roles
+
+
+def test_execute_with_attachment(
+    mocked_api: MockRouter,
+    rzob_model: RzobModel,
+    simple_response: llm.Response,
+    api_key: str,
+) -> None:
+    """Execute with text/plain attachment includes attachment content."""
+    mocked_api.post(f"{API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+    )
+    att = llm.Attachment(type="text/plain", content=b"attached text content")
+    prompt = llm.Prompt(
+        "Summarize", model=rzob_model, options=RzobModel.Options(), attachments=[att]
+    )
+    chunks = list(rzob_model.execute(prompt, False, simple_response, None, api_key))
+    assert chunks == ["ok"]
+    req_body = json.loads(mocked_api.calls.last.request.content)
+    last_msg = req_body["messages"][-1]
+    # With attachments, content is a list of parts
+    assert isinstance(last_msg["content"], list)
+
+
+def test_execute_with_all_options(
+    mocked_api: MockRouter,
+    rzob_model: RzobModel,
+    simple_response: llm.Response,
+    api_key: str,
+) -> None:
+    """Execute with top_p, tools, response_format options forwarded."""
+    route = mocked_api.post(f"{API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+    )
+    prompt = llm.Prompt(
+        "test",
+        model=rzob_model,
+        options=RzobModel.Options(
+            top_p=0.9,
+            tools=[{"type": "function", "function": {"name": "test"}}],
+            response_format={"type": "json_object"},
+        ),
+    )
+    list(rzob_model.execute(prompt, False, simple_response, None, api_key))
+    body = json.loads(route.calls[0].request.content)
+    assert body["top_p"] == 0.9
+    assert body["tools"] == [{"type": "function", "function": {"name": "test"}}]
+    assert body["response_format"] == {"type": "json_object"}
+
+
+# ── __str__ ─────────────────────────────────────────────────
+
+
+def test_model_str(rzob_model: RzobModel) -> None:
+    """RzobModel.__str__ returns expected format."""
+    assert str(rzob_model) == "Flying Circus: fcio-rzob/gpt-oss-20b"
+
+
+# ── register_models with short aliases ──────────────────────
+
+
+def test_register_models_includes_short_aliases(cached_models: list[dict], user_dir: Path) -> None:
+    """register_models registers short aliases for known models."""
+    registered_pairs: list[tuple[object, dict]] = []
+    register_models(lambda m, **kw: registered_pairs.append((m, kw)))
+    # Find the gpt-oss:20b model registration
+    for model, kwargs in registered_pairs:
+        if model.api_id == "gpt-oss:20b":
+            aliases = kwargs.get("aliases", [])
+            assert "20b" in aliases
+            break
+    else:
+        pytest.fail("gpt-oss:20b not registered")
+
+
+# ── register_models multi-location ──────────────────────────
+
+
+def test_register_models_non_rzob_no_short_alias(
+    user_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-rzob locations don't get short aliases."""
+    dev_cache = user_dir / "fcio_models_dev.json"
+    dev_cache.write_text(json.dumps([{"id": "gpt-oss:20b", "safe_id": "gpt-oss-20b"}]))
+    registered_pairs: list[tuple[object, dict]] = []
+    register_models(lambda m, **kw: registered_pairs.append((m, kw)))
+    for model, kwargs in registered_pairs:
+        if model.model_id.startswith("fcio-dev"):
+            aliases = kwargs.get("aliases", [])
+            assert "20b" not in aliases
+            break
