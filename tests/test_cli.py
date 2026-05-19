@@ -1015,3 +1015,387 @@ def test_cache_migration_old_to_new(tmp_path: Path) -> None:
     assert path.name == "fcio_models_rzob.json"
     assert not old_file.exists()
     assert path.exists()
+
+
+# ── Coverage gap tests ───────────────────────────────────
+
+
+@respx.mock
+def test_make_client_verbose_auth_masking() -> None:
+    """Covers auth header masking in _on_request (line 126: value = 'Bearer sk-***...')."""
+    from llm_fcio import _make_client
+
+    respx.get("https://api.test.com/v1/test").mock(
+        return_value=httpx.Response(200, json={"ok": True}),
+    )
+    client = _make_client(verbose=True, timeout=5.0)
+    try:
+        resp = client.get(
+            "https://api.test.com/v1/test",
+            headers={"Authorization": "Bearer sk-real-secret-key"},
+        )
+        assert resp.status_code == 200
+    finally:
+        client.close()
+
+
+@respx.mock
+def test_make_client_verbose_non_json_request_body() -> None:
+    """Covers non-JSON request body fallback in _on_request (lines 135-139)."""
+    from llm_fcio import _make_client
+
+    respx.post("https://api.test.com/v1/test").mock(
+        return_value=httpx.Response(200, json={"ok": True}),
+    )
+    client = _make_client(verbose=True, timeout=5.0)
+    try:
+        resp = client.post(
+            "https://api.test.com/v1/test",
+            content=b"this is plain text, not json",
+        )
+        assert resp.status_code == 200
+    finally:
+        client.close()
+
+
+@respx.mock
+def test_make_client_verbose_empty_response_body() -> None:
+    """Covers empty response body early return in _on_response (lines 154-155).
+
+    httpx event hooks can't access response.text via respx (ResponseNotRead),
+    so we extract the hook from a verbose client and call it directly with a
+    pre-loaded response.
+    """
+    from llm_fcio import _make_client
+
+    client = _make_client(verbose=True, timeout=5.0)
+    try:
+        response_hooks = client._event_hooks["response"]
+        response = httpx.Response(200, content=b"")
+        for hook in response_hooks:
+            hook(response)
+    finally:
+        client.close()
+
+
+def test_make_client_verbose_non_json_response_body() -> None:
+    """Covers non-JSON response body fallback in _on_response (lines 164-167).
+
+    Direct hook invocation because respx doesn't set _content during hooks.
+    """
+    from llm_fcio import _make_client
+
+    client = _make_client(verbose=True, timeout=5.0)
+    try:
+        response_hooks = client._event_hooks["response"]
+        response = httpx.Response(
+            200,
+            content=b"plain text response body",
+            headers={"content-type": "text/plain"},
+        )
+        for hook in response_hooks:
+            hook(response)
+    finally:
+        client.close()
+
+
+# ── Group B: get_api_key real path ───────────────────────
+
+
+def test_get_api_key_success() -> None:
+    """Covers get_api_key success path (lines 100-105)."""
+    from llm_fcio import LOCATIONS, get_api_key
+
+    with patch("llm_fcio.llm.get_key", return_value="my-api-key"):
+        result = get_api_key(LOCATIONS["rzob"])
+    assert result == "my-api-key"
+
+
+def test_get_api_key_missing() -> None:
+    """Covers get_api_key ClickException when key is None (lines 101-104)."""
+    from llm_fcio import LOCATIONS, get_api_key
+
+    with (
+        patch("llm_fcio.llm.get_key", return_value=None),
+        pytest.raises(click.ClickException, match="API key not found"),
+    ):
+        get_api_key(LOCATIONS["rzob"])
+
+
+# ── Group D: _resolve_model fzf FileNotFoundError ────────
+
+
+@respx.mock
+def test_resolve_model_fzf_file_not_found(runner: CliRunner, cli: click.Group) -> None:
+    """Covers FileNotFoundError in fzf subprocess (lines 285-286)."""
+    with (
+        patch("llm_fcio.get_api_key", return_value="test-key"),
+        patch("shutil.which", return_value="/usr/bin/fzf"),
+        patch("subprocess.run", side_effect=FileNotFoundError("fzf binary vanished")),
+    ):
+        _setup_models_route()
+        _setup_chat_route("fnf fallback reply")
+        result = runner.invoke(
+            cli,
+            ["fcio", "chat", "--no-stream", "--no-markdown", "-m", "oss:20b", "hi"],
+        )
+    assert result.exit_code == 0
+    assert "fnf fallback reply" in result.output
+
+
+# ── Group E: Capabilities _probe_endpoint ────────────────
+
+
+@respx.mock
+def test_capabilities_probe_endpoint_success(runner: CliRunner, cli: click.Group) -> None:
+    """Covers _probe_endpoint returning available on 200 response (line 953)."""
+    with patch("llm_fcio.get_api_key", return_value="test-key"):
+        _setup_models_route()
+        respx.post(CHAT_URL).mock(
+            return_value=httpx.Response(200, json={"choices": []}),
+        )
+        respx.post(EMBED_URL).mock(
+            return_value=httpx.Response(200, json={"data": []}),
+        )
+        result = runner.invoke(cli, ["fcio", "capabilities"])
+    assert result.exit_code == 0
+    assert "\u2705 available" in result.output
+
+
+@respx.mock
+def test_capabilities_probe_non_auth_error(runner: CliRunner, cli: click.Group) -> None:
+    """Covers _probe_endpoint error string for non-auth errors (line 959)."""
+    with patch("llm_fcio.get_api_key", return_value="test-key"):
+        _setup_models_route()
+        respx.post(CHAT_URL).mock(
+            return_value=httpx.Response(403, json={"detail": "Rate limited"}),
+        )
+        respx.post(EMBED_URL).mock(
+            return_value=httpx.Response(403, json={"detail": "Rate limited"}),
+        )
+        result = runner.invoke(cli, ["fcio", "capabilities"])
+    assert result.exit_code == 0
+    assert "\u274c" in result.output
+    assert "Rate limited" in result.output
+
+
+# ── Group F: ingest confirmation + existing collection ──
+
+
+@patch("llm_fcio.llm.Collection")
+@patch("llm_fcio.llm.user_dir")
+def test_ingest_with_confirmation_dialog(
+    mock_user_dir: MagicMock,
+    mock_collection_cls: MagicMock,
+    runner: CliRunner,
+    cli: click.Group,
+    tmp_path: Path,
+) -> None:
+    """Covers the confirmation dialog branch (lines 1270-1278)."""
+    mock_user_dir.return_value = tmp_path
+    mock_col = MagicMock()
+    mock_col.model.return_value.model_id = "bge-m3-567m"
+    mock_collection_cls.exists.return_value = False
+    mock_collection_cls.return_value = mock_col
+
+    doc = tmp_path / "test.md"
+    doc.write_text("# Test\nHello world\n")
+
+    with patch("click.confirm", return_value=True):
+        result = runner.invoke(cli, ["fcio", "ingest", "testcol", str(doc)])
+    assert result.exit_code == 0
+    assert "Files to ingest" in result.output
+    assert "Ingested" in result.output
+
+
+@patch("llm_fcio.llm.Collection")
+@patch("llm_fcio.llm.user_dir")
+def test_ingest_existing_collection(
+    mock_user_dir: MagicMock,
+    mock_collection_cls: MagicMock,
+    runner: CliRunner,
+    cli: click.Group,
+    tmp_path: Path,
+) -> None:
+    """Covers existing collection path (line 1283: col = llm.Collection(collection, db))."""
+    mock_user_dir.return_value = tmp_path
+    mock_col = MagicMock()
+    mock_col.model.return_value.model_id = "bge-m3-567m"
+    mock_collection_cls.exists.return_value = True
+    mock_collection_cls.return_value = mock_col
+
+    doc = tmp_path / "test.md"
+    doc.write_text("# Test\nHello\n")
+
+    result = runner.invoke(cli, ["fcio", "ingest", "testcol", str(doc), "--yes"])
+    assert result.exit_code == 0
+    assert "Ingested" in result.output
+
+
+@patch("llm_fcio.llm.Collection")
+@patch("llm_fcio.llm.user_dir")
+def test_ingest_tracked_generator_consumed(
+    mock_user_dir: MagicMock,
+    mock_collection_cls: MagicMock,
+    runner: CliRunner,
+    cli: click.Group,
+    tmp_path: Path,
+) -> None:
+    """Covers _tracked() generator body (lines 1303-1308) by consuming the iterator."""
+    mock_user_dir.return_value = tmp_path
+    mock_col = MagicMock()
+    mock_col.model.return_value.model_id = "bge-m3-567m"
+    mock_collection_cls.exists.return_value = False
+    mock_collection_cls.return_value = mock_col
+
+    consumed: list[tuple[str, str]] = []
+
+    def consume_gen(gen, **_kwargs):  # noqa: ANN001, ANN003, ANN202
+        for item in gen:
+            consumed.append(item)
+
+    mock_col.embed_multi.side_effect = consume_gen
+
+    doc = tmp_path / "test.md"
+    doc.write_text("# Test\nLine 1\nLine 2\nLine 3\n")
+
+    result = runner.invoke(cli, ["fcio", "ingest", "testcol", str(doc), "--yes"])
+    assert result.exit_code == 0
+    assert "Ingested" in result.output
+    assert len(consumed) > 0
+
+
+# ── Group G: _send_chat_request streaming paths ─────────
+
+
+def test_chat_streaming_with_markdown_render(runner: CliRunner, cli: click.Group) -> None:
+    """Covers streaming chat with renderer active (lines 1359, 1363: renderer.feed/flush)."""
+    with (
+        patch("llm_fcio.get_api_key", return_value="test-key"),
+        patch("llm_fcio._resolve_model", return_value="gpt-oss:20b"),
+        patch("llm_fcio._iter_sse_content", return_value=iter(["Hello", " **world**"])),
+    ):
+        result = runner.invoke(cli, ["fcio", "chat", "--markdown", "Say hello"])
+    assert result.exit_code == 0
+    assert "Hello" in result.output
+
+
+def test_chat_streaming_api_error_reraise(runner: CliRunner, cli: click.Group) -> None:
+    """Covers ApiError re-raise in streaming path (lines 1366-1367)."""
+    from llm_fcio import ApiError
+
+    with (
+        patch("llm_fcio.get_api_key", return_value="test-key"),
+        patch("llm_fcio._resolve_model", return_value="gpt-oss:20b"),
+        patch("llm_fcio._iter_sse_content", side_effect=ApiError("stream error")),
+    ):
+        result = runner.invoke(cli, ["fcio", "chat", "--no-markdown", "test"])
+    assert result.exit_code != 0
+
+
+@respx.mock
+def test_chat_non_stream_empty_choices(runner: CliRunner, cli: click.Group) -> None:
+    """Covers empty choices raising ApiError in non-streaming path (line 1375)."""
+    with patch("llm_fcio.get_api_key", return_value="test-key"):
+        _setup_models_route()
+        respx.post(CHAT_URL).mock(
+            return_value=httpx.Response(200, json={"choices": []}),
+        )
+        result = runner.invoke(cli, ["fcio", "chat", "--no-stream", "test"])
+    assert result.exit_code != 0
+    assert result.exception is not None
+
+
+# ── Additional coverage gap tests ───────────────────────
+
+
+@respx.mock
+def test_make_client_verbose_long_non_json_request() -> None:
+    """Covers 500-char truncation of non-JSON request body (line 138)."""
+    from llm_fcio import _make_client
+
+    respx.post("https://api.test.com/v1/test").mock(
+        return_value=httpx.Response(200, json={"ok": True}),
+    )
+    client = _make_client(verbose=True, timeout=5.0)
+    try:
+        long_body = b"x" * 600
+        resp = client.post(
+            "https://api.test.com/v1/test",
+            content=long_body,
+        )
+        assert resp.status_code == 200
+    finally:
+        client.close()
+
+
+def test_make_client_verbose_long_non_json_response() -> None:
+    """Covers 500-char truncation of non-JSON response body (lines 165-166)."""
+    from llm_fcio import _make_client
+
+    client = _make_client(verbose=True, timeout=5.0)
+    try:
+        response_hooks = client._event_hooks["response"]
+        response = httpx.Response(
+            200,
+            content=b"y" * 600,
+            headers={"content-type": "text/plain"},
+        )
+        for hook in response_hooks:
+            hook(response)
+    finally:
+        client.close()
+
+
+def test_make_client_verbose_large_json_response() -> None:
+    """Covers 2000-char truncation of JSON response body (line 160)."""
+    from llm_fcio import _make_client
+
+    client = _make_client(verbose=True, timeout=5.0)
+    try:
+        response_hooks = client._event_hooks["response"]
+        large_data = {"key": "x" * 3000}
+        response = httpx.Response(200, json=large_data)
+        for hook in response_hooks:
+            hook(response)
+    finally:
+        client.close()
+
+
+@patch("llm_fcio.llm.Collection")
+@patch("llm_fcio.llm.user_dir")
+def test_ingest_confirmation_abort(
+    mock_user_dir: MagicMock,
+    mock_collection_cls: MagicMock,
+    runner: CliRunner,
+    cli: click.Group,
+    tmp_path: Path,
+) -> None:
+    """Covers abort path in confirmation dialog (line 1278)."""
+    mock_user_dir.return_value = tmp_path
+    mock_col = MagicMock()
+    mock_col.model.return_value.model_id = "bge-m3-567m"
+    mock_collection_cls.exists.return_value = False
+    mock_collection_cls.return_value = mock_col
+
+    doc = tmp_path / "test.md"
+    doc.write_text("# Test\nHello world\n")
+
+    with patch("click.confirm", return_value=False):
+        result = runner.invoke(cli, ["fcio", "ingest", "testcol", str(doc)])
+    assert result.exit_code != 0
+    assert "Aborted" in result.output
+
+
+@respx.mock
+def test_chat_with_max_tokens(runner: CliRunner, cli: click.Group) -> None:
+    """Covers max_tokens body field in _build_chat_body (line 1335)."""
+    with patch("llm_fcio.get_api_key", return_value="test-key"):
+        _setup_models_route()
+        _setup_chat_route("Limited reply")
+        result = runner.invoke(
+            cli,
+            ["fcio", "chat", "--no-stream", "--no-markdown", "--max-tokens", "100", "test"],
+        )
+    assert result.exit_code == 0
+    assert "Limited reply" in result.output
