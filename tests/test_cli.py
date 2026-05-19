@@ -690,7 +690,10 @@ def test_make_client_debug_sends_header() -> None:
         client.get("https://api.test.com/v1/models")
         request, _ = route.calls.last
         assert "x-skvaider-debug-id" in request.headers
-        assert request.headers["x-skvaider-debug-id"].startswith("llm-fcio-")
+        # LID format: XXXXXXXXX-XXXX (base32-crockford, 14 chars total)
+        debug_id = request.headers["x-skvaider-debug-id"]
+        assert len(debug_id) == 14
+        assert debug_id[9] == "-"
     finally:
         client.close()
 
@@ -760,7 +763,10 @@ def test_make_client_verbose_and_debug_combined() -> None:
         assert resp.status_code == 200
         request, _ = route.calls.last
         assert "x-skvaider-debug-id" in request.headers
-        assert request.headers["x-skvaider-debug-id"].startswith("llm-fcio-")
+        # LID format: XXXXXXXXX-XXXX (base32-crockford, 14 chars total)
+        debug_id = request.headers["x-skvaider-debug-id"]
+        assert len(debug_id) == 14
+        assert debug_id[9] == "-"
     finally:
         client.close()
 

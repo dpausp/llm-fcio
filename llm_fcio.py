@@ -37,14 +37,26 @@ _DEBUG: bool = False
 _debug_console = Console(stderr=True, force_terminal=True)
 
 
-def _generate_debug_id() -> str:
-    """Generate a short unique debug ID for X-Skvaider-Debug-ID header."""
-    try:
-        import shortuuid
+_B32C = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
-        return f"llm-fcio-{shortuuid.uuid()}"
-    except ImportError:
-        return f"llm-fcio-{int(time.time())}-{random.randbytes(4).hex()}"
+
+def _b32c_encode(value: int, length: int) -> str:
+    """Encode integer as base32-crockford string of given length."""
+    chars: list[str] = []
+    for _ in range(length):
+        chars.append(_B32C[value & 0x1F])
+        value >>= 5
+    return "".join(reversed(chars))
+
+
+def _generate_lid() -> str:
+    """Generate a LID: 42-bit ms timestamp + 22-bit random, base32-crockford."""
+    ts_ms = int(time.time() * 1000) & ((1 << 42) - 1)
+    rand = random.getrandbits(22)
+    combined = (ts_ms << 22) | rand
+    # 64 bits / 5 bits per char = 13 chars, split as XXXXXXXXX-XXXX
+    encoded = _b32c_encode(combined, 13)
+    return f"{encoded[:9]}-{encoded[9:]}"
 
 
 # ── Location Configuration ──────────────────────────────
@@ -100,7 +112,7 @@ def _make_client(
     if not verbose and not debug:
         return httpx.Client(timeout=timeout)
 
-    debug_id = _generate_debug_id() if debug else None
+    debug_id = _generate_lid() if debug else None
 
     def _on_request(request: httpx.Request) -> None:
         if debug_id:
