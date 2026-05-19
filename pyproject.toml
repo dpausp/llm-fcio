@@ -55,6 +55,7 @@ dependency_groups = ["dev"]
 [tool.tox.env.lint]
 description = "Run ruff linter and format check"
 skip_install = true
+allowlist_externals = ["ruff"]
 commands = [
   ["ruff", "check", "."],
   ["ruff", "format", "--check", "."],
@@ -63,6 +64,7 @@ commands = [
 [tool.tox.env.type]
 description = "Run ty type checker"
 skip_install = true
+allowlist_externals = ["ty"]
 commands = [
   ["ty", "check", "llm_fcio.py"],
 ]
