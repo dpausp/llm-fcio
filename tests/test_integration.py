@@ -640,15 +640,6 @@ def test_load_models_empty_when_no_cache(user_dir: Path) -> None:
     assert models == []
 
 
-def test_load_models_migrates_string_list(user_dir: Path) -> None:
-    """_load_models migrates old string-only format to dict format."""
-    cache_file = user_dir / "fcio_models_rzob.json"
-    cache_file.write_text(json.dumps(["gpt-oss:20b", "bge-m3:567m"]))
-    models = _load_models("rzob")
-    assert len(models) == 2
-    assert models[0] == {"id": "gpt-oss:20b", "safe_id": "gpt-oss:20b"}
-
-
 # ── execute with conversation ────────────────────────────────
 
 

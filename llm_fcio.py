@@ -165,7 +165,7 @@ def _make_client(
                     if len(body_text) > 500:
                         body_text = body_text[:500] + "... (truncated)"
                     _debug_console.print(body_text)
-            except Exception:  # noqa: BLE001
+            except ValueError, OSError, RuntimeError:
                 _debug_console.print("  [dim](body not available)[/dim]")
 
     return httpx.Client(
@@ -253,10 +253,6 @@ def _load_models(loc_name: str = DEFAULT_LOCATION) -> list[dict]:
     if not p.exists():
         return []
     data = json.loads(p.read_text())
-    # Migration: String-Liste → Dict-Liste
-    if data and isinstance(data[0], str):
-        data = [{"id": m, "safe_id": m} for m in data]
-        p.write_text(json.dumps(data))
     return data
 
 
@@ -551,7 +547,7 @@ class _StreamingRenderer:
                     )
                     sys.stdout.flush()
                     return
-                except Exception:  # noqa: BLE001
+                except ValueError, OSError, RuntimeError:
                     pass
             self._console.print(Text(code))
             sys.stdout.flush()
@@ -563,7 +559,7 @@ class _StreamingRenderer:
         try:
             self._console.print(Markdown(text))
             sys.stdout.flush()
-        except Exception:  # noqa: BLE001
+        except ValueError, OSError, RuntimeError:
             self._console.print(Text(text))
             sys.stdout.flush()
 

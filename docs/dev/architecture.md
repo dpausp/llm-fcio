@@ -46,9 +46,8 @@ registered at import time — you can't make API calls during registration. The
 cache bridges this gap. Without a cache (no `refresh` run yet), the plugin
 registers nothing and stays inert.
 
-The cache has a migration path: older caches stored plain string lists, current
-caches store dicts with `id` and `safe_id` keys. The loader handles both
-formats transparently.
+The cache stores dicts with `id` and `safe_id` keys. If the cache is missing or
+corrupt, `llm fcio refresh` regenerates it from the API.
 
 ### Safe ID Mapping
 
