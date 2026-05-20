@@ -122,9 +122,8 @@ def _make_client(
                 f"[bold blue]\u2192[/bold blue] {request.method} {request.url.path}"
             )
             for name, value in request.headers.items():
-                if name.lower() == "authorization":
-                    value = "Bearer sk-***..."
-                _debug_console.print(f"  [dim]{name}:[/dim] {value}")
+                display_value = "Bearer sk-***..." if name.lower() == "authorization" else value
+                _debug_console.print(f"  [dim]{name}:[/dim] {display_value}")
             if request.content:
                 try:
                     body = json.loads(request.content)
@@ -252,8 +251,7 @@ def _load_models(loc_name: str = DEFAULT_LOCATION) -> list[dict]:
     p = _cache_path(loc_name)
     if not p.exists():
         return []
-    data = json.loads(p.read_text())
-    return data
+    return json.loads(p.read_text())
 
 
 def _resolve_model(model_hint: str, key: str, api_base: str) -> str:
@@ -301,7 +299,7 @@ def _resolve_model(model_hint: str, key: str, api_base: str) -> str:
 
 class RzobModel(llm.KeyModel):
     can_stream = True
-    attachment_types = {"text/plain"}
+    attachment_types = {"text/plain"}  # noqa: RUF012
 
     class Options(llm.Options):
         temperature: float | None = Field(
@@ -633,11 +631,11 @@ def _discover_files(
     """Discover files from paths, applying gitignore + hard-exclude filtering."""
     all_files: list[Path] = []
     for p in paths:
-        p = p.resolve()
-        if p.is_file():
-            all_files.append(p)
-        elif p.is_dir():
-            gitignore_path = p / ".gitignore"
+        resolved = p.resolve()
+        if resolved.is_file():
+            all_files.append(resolved)
+        elif resolved.is_dir():
+            gitignore_path = resolved / ".gitignore"
             spec_lines: list[str] = []
             if gitignore_path.exists():
                 spec_lines = gitignore_path.read_text().splitlines()
@@ -664,6 +662,15 @@ def _chunk_lines(
     Returns list of (chunk_id, chunk_text) tuples.
     Chunk ID format: 'filepath:start-end' (1-based lines).
     """
+    if chunk_size <= 0:
+        msg = "chunk_size must be positive"
+        raise ValueError(msg)
+    if overlap < 0:
+        msg = "overlap must be non-negative"
+        raise ValueError(msg)
+    if overlap >= chunk_size:
+        msg = "overlap must be less than chunk_size"
+        raise ValueError(msg)
     lines = text.splitlines()
     if not lines:
         return []
@@ -771,7 +778,7 @@ def cmd_models(ctx: click.Context, model_id: str | None, as_json: bool, filt: st
             click.echo(f"ID:     {data.get('id', 'unknown')}")
             click.echo(f"Owner:  {data.get('owned_by', 'unknown')}")
             created = data.get("created")
-            click.echo(f"Created: {created if created else 'unknown'}")
+            click.echo(f"Created: {created or 'unknown'}")
             click.echo("Type:   chat")
         return
 

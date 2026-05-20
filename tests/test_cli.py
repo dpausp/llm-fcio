@@ -564,11 +564,13 @@ def test_ingest_path_not_found(
     assert "Path not found" in result.output
 
 
+@patch("llm_fcio.sqlite_utils.Database")
 @patch("llm_fcio.llm.Collection")
 @patch("llm_fcio.llm.user_dir")
 def test_ingest_single_file(
     mock_user_dir: MagicMock,
     mock_collection_cls: MagicMock,
+    _mock_db: MagicMock,
     runner: CliRunner,
     cli: click.Group,
     tmp_path: Path,
@@ -589,11 +591,13 @@ def test_ingest_single_file(
     mock_col.embed_multi.assert_called_once()
 
 
+@patch("llm_fcio.sqlite_utils.Database")
 @patch("llm_fcio.llm.Collection")
 @patch("llm_fcio.llm.user_dir")
 def test_ingest_multiple_files(
     mock_user_dir: MagicMock,
     mock_collection_cls: MagicMock,
+    _mock_db: MagicMock,
     runner: CliRunner,
     cli: click.Group,
     tmp_path: Path,
@@ -619,11 +623,13 @@ def test_ingest_multiple_files(
     assert "2 chunks" in result.output
 
 
+@patch("llm_fcio.sqlite_utils.Database")
 @patch("llm_fcio.llm.Collection")
 @patch("llm_fcio.llm.user_dir")
 def test_ingest_chunk_options(
     mock_user_dir: MagicMock,
     mock_collection_cls: MagicMock,
+    _mock_db: MagicMock,
     runner: CliRunner,
     cli: click.Group,
     tmp_path: Path,
@@ -1182,11 +1188,13 @@ def test_capabilities_probe_non_auth_error(runner: CliRunner, cli: click.Group) 
 # ── Group F: ingest confirmation + existing collection ──
 
 
+@patch("llm_fcio.sqlite_utils.Database")
 @patch("llm_fcio.llm.Collection")
 @patch("llm_fcio.llm.user_dir")
 def test_ingest_with_confirmation_dialog(
     mock_user_dir: MagicMock,
     mock_collection_cls: MagicMock,
+    _mock_db: MagicMock,
     runner: CliRunner,
     cli: click.Group,
     tmp_path: Path,
@@ -1208,11 +1216,13 @@ def test_ingest_with_confirmation_dialog(
     assert "Ingested" in result.output
 
 
+@patch("llm_fcio.sqlite_utils.Database")
 @patch("llm_fcio.llm.Collection")
 @patch("llm_fcio.llm.user_dir")
 def test_ingest_existing_collection(
     mock_user_dir: MagicMock,
     mock_collection_cls: MagicMock,
+    _mock_db: MagicMock,
     runner: CliRunner,
     cli: click.Group,
     tmp_path: Path,
@@ -1232,11 +1242,13 @@ def test_ingest_existing_collection(
     assert "Ingested" in result.output
 
 
+@patch("llm_fcio.sqlite_utils.Database")
 @patch("llm_fcio.llm.Collection")
 @patch("llm_fcio.llm.user_dir")
 def test_ingest_tracked_generator_consumed(
     mock_user_dir: MagicMock,
     mock_collection_cls: MagicMock,
+    _mock_db: MagicMock,
     runner: CliRunner,
     cli: click.Group,
     tmp_path: Path,

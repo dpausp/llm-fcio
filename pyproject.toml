@@ -26,6 +26,7 @@ dev = [
     "tox>=4.0.0",
     "tox-uv>=0.0.1",
     "pip-audit>=0.3.0",
+    "hypothesis>=6.0.0",
 ]
 [tool.pytest.ini_options]
 addopts = ["--tb=short", "--cov=llm_fcio", "--cov-report=term-missing", "--durations=0"]
@@ -37,7 +38,7 @@ target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["ANN", "E", "F", "I", "N", "W", "UP", "B", "C4", "SIM", "TCH", "BLE", "B904"]
+select = ["ANN", "E", "F", "I", "N", "W", "UP", "B", "C4", "SIM", "TCH", "BLE", "B904", "RUF012", "RET504", "FURB110", "PLW2901"]
 ignore = ["E501", "TC003"]
 
 [tool.ruff.lint.per-file-ignores]

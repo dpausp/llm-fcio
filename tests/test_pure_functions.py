@@ -81,10 +81,24 @@ def test_chunk_lines_overlap_content_shared() -> None:
     assert "line6" in result[1][1]
 
 
-def test_chunk_lines_overlap_equal_to_chunk_size_infinite_loop() -> None:
-    # overlap >= chunk_size causes step=0 → infinite loop
-    # Function does not guard against this — skip to avoid hang
-    pytest.skip("_chunk_lines has no guard for overlap >= chunk_size")
+def test_chunk_lines_overlap_equal_to_chunk_size_raises() -> None:
+    with pytest.raises(ValueError, match="overlap"):
+        _chunk_lines("a\nb\nc", "f.py", 5, 5)
+
+
+def test_chunk_lines_overlap_greater_than_chunk_size_raises() -> None:
+    with pytest.raises(ValueError, match="overlap"):
+        _chunk_lines("a\nb\nc", "f.py", 3, 10)
+
+
+def test_chunk_lines_zero_chunk_size_raises() -> None:
+    with pytest.raises(ValueError, match="chunk_size"):
+        _chunk_lines("a\nb", "f.py", 0, 0)
+
+
+def test_chunk_lines_negative_overlap_raises() -> None:
+    with pytest.raises(ValueError, match="overlap"):
+        _chunk_lines("a\nb", "f.py", 5, -1)
 
 
 def test_chunk_lines_ids_are_one_based() -> None:
