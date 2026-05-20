@@ -30,7 +30,6 @@ Select a location with `-l`/`--location` (default: `rzob`). Model IDs include th
 
 ```bash
 llm fcio -l dev refresh           # refresh models for dev location
-llm fcio -l whq health            # health check for whq
 ```
 
 ## When not to use this

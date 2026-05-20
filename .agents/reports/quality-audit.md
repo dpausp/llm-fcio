@@ -263,3 +263,35 @@ No code changes made — this is an audit-only run.
 ## Raw Data Location
 
 `.agents/tmp/quality/` — inventory/, baseline/, extreme/, analysis/, e2e/
+
+## Tidy Session — 2026-05-20
+
+### Mock Hardening
+- Bare mocks before: 9 → after: 9
+- Migrated to typed: 0
+- Untouchable: 9 (llm.Collection InvalidSpecError — structural constraint)
+
+### Suppression Cleanup
+- Linter suppressions removed: 0 (all 4 noqa were legitimate)
+- Type-check suppressions removed: 0 (all 11 ty:ignore justified by llm dynamic loading)
+- Test skips removed: 0 (1 skip documents known edge case)
+- Restored (still needed): 0
+
+### Mechanical Fixes Applied
+- **README.md:33**: Removed phantom `llm fcio -l whq health` reference (command never existed)
+- **pyproject.toml**: Added `import_mode = "importlib"` to `[tool.pytest.ini_options]`
+- **tests/impl_spec/test_modernize_deps.py**: Fixed pre-existing I001 import sorting (ruff --fix)
+
+### Post-Tidy Gates
+| Tool | Before | After |
+|------|--------|-------|
+| tox (lint+type+cov) | 3/3 passed | 3/3 passed |
+| ruff | 0 issues | 0 issues |
+| ty | 0 errors | 0 errors |
+| pytest | 173 passed, 3 skipped | 173 passed, 3 skipped, 14 xfailed |
+
+### Skipped (Not Mechanical)
+- Mock hardening: 9 bare MagicMock blocked by llm.Collection InvalidSpecError (NAV-5)
+- Test directory tiers: flat tests/ appropriate for 6 files (NAV-3)
+- _chunk_lines overlap guard: requires design decision for behavior
+- Unclosed sqlite warnings: requires fixture lifecycle analysis
