@@ -9,6 +9,9 @@ lifecycle:
   plan:
     completed_at: "2026-05-21T19:30:00Z"
     git_rev: "2a0fe1e"
+  workflow:
+    completed_at: "2026-05-21T20:00:00Z"
+    git_rev: "a092fd0"
 ---
 
 # analysis-commands
