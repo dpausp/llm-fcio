@@ -92,6 +92,66 @@ llm fcio chat --no-stream --json "Hello"
 
 ---
 
+## llm fcio analyze
+
+Analyzes code files using an LLM. Supports two analysis types: **review** (code review) and **overview** (project summary). Zero-config — run without arguments to analyze the current directory.
+
+```bash
+# Analyze current project (auto-detect code files)
+llm fcio analyze
+
+# Code review of specific files
+llm fcio analyze review src/**/*.py
+
+# Project overview with a specific model
+llm fcio analyze overview --model 120b
+```
+
+When called without arguments, the command scans the current directory for code files (respects `.gitignore`), displays the file list with sizes and an estimated token count, then sends everything to the model.
+
+### Analysis types
+
+| Type | Behavior |
+|---|---|
+| `review` (default) | Reviews the provided code for issues, style problems, and suggestions |
+| `overview` | Summarizes the project structure and architecture |
+
+### File collection
+
+Files are detected by extension whitelist (common programming languages). `.gitignore` rules are respected. Collected files are passed to the model as context.
+
+Explicit file paths or glob patterns override auto-detection.
+
+### Templates
+
+The analysis prompts are also available as llm templates:
+
+```bash
+llm -t fcio:review    # review prompt, use with any model
+llm -t fcio:overview  # overview prompt, use with any model
+```
+
+Discover all fcio templates with `llm templates list`.
+
+### Options
+
+`type`
+: Analysis type: `review` or `overview` (default: `review`).
+
+`files`
+: One or more file paths or glob patterns. Omit to auto-detect code files in the current directory.
+
+`--model <id>`
+: Selects the model (accepts fuzzy names like `120b`).
+
+### Failure modes
+
+- **No code files found** — prints "No code files found in <dir>" with hints (specify files explicitly, check file extensions) and exits with code 1.
+- **Model unavailable** — propagates llm's model resolution error.
+- **Renderer failure** — falls back to raw output silently.
+
+---
+
 ## llm fcio embed
 
 Generates embeddings for one or more texts. For bulk ingestion, use [ingest](#llm-fcio-ingest) instead.

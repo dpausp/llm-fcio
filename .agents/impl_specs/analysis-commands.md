@@ -7,6 +7,8 @@ lifecycle:
     completed_at: "2026-05-21T18:54:03Z"
     git_rev: "753409e"
   plan:
+    completed_at: "2026-05-21T19:30:00Z"
+    git_rev: "2a0fe1e"
 ---
 
 # analysis-commands
@@ -192,3 +194,38 @@ Discovery:
 | No code files found | "No code files found in \<dir\>" + hints (specify files, check extensions) + exit 1 |
 | Model unavailable | Propagate llm's model resolution error |
 | Renderer failure | Fallback to raw output, transparent degradation |
+
+## Appendix
+
+```yaml
+implementation_plan:
+  id: analysis-commands
+  description: "Developer-facing analysis commands (review/overview) and streaming markdown renderer hook for llm-fcio plugin"
+  git_rev: "2a0fe1e"
+  created_at: "2026-05-21T19:30:00Z"
+  target_tests:
+    - file: tests/impl_spec/test_analysis_commands.py
+      tests:
+        - test_file_collection_includes_python_files
+        - test_file_collection_excludes_non_code_extensions
+        - test_file_collection_respects_gitignore
+        - test_file_collection_returns_path_objects
+        - test_file_collection_empty_directory
+        - test_templates_dict_contains_review
+        - test_templates_dict_contains_overview
+        - test_template_loader_registered_as_fcio
+        - test_template_loader_returns_llm_template_instances
+        - test_templates_available_via_fcio_prefix
+        - test_analyze_help_shows_types_and_examples
+        - test_analyze_auto_detects_code_files_in_cwd
+        - test_analyze_review_with_specific_files
+        - test_analyze_overview_with_model_flag
+        - test_analyze_no_code_files_error_message
+        - test_analyze_no_code_files_shows_actionable_hints
+        - test_analyze_displays_file_sizes_and_token_estimate
+        - test_analyze_invalid_analysis_type
+        - test_renderer_patch_only_active_when_tty
+        - test_renderer_patch_not_applied_when_not_tty
+        - test_renderer_failure_falls_back_to_original_iter
+        - test_renderer_patch_transparent_degradation
+```

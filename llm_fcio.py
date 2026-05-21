@@ -1,5 +1,6 @@
 """llm-fcio: Plugin für FCIO AI platform (multi-location)"""
 
+import contextlib
 import json
 import random
 import shutil
@@ -562,6 +563,45 @@ class _StreamingRenderer:
             sys.stdout.flush()
 
 
+def install_renderer_patch() -> None:
+    """Monkey-patch llm.Response.__iter__ for rich streaming markdown output.
+
+    Only activates when stdout is a TTY. Falls back to original behavior
+    on renderer failure. Idempotent — safe to call multiple times.
+
+    Spec decisions: renderer-hook, renderer-safety
+    """
+    if not sys.stdout.isatty():
+        return
+
+    original_iter = llm.Response.__iter__
+
+    # Idempotency: don't double-wrap
+    if getattr(original_iter, "_fcio_patched", False):
+        return
+
+    def _patched_iter(self: llm.Response) -> Iterator[str]:
+        try:
+            renderer = _StreamingRenderer()
+        except Exception:  # noqa: BLE001 — renderer-safety: fallback on any failure
+            yield from original_iter(self)
+            return
+        use_renderer = True
+        for chunk in original_iter(self):
+            if use_renderer:
+                try:
+                    renderer.feed(chunk)
+                except Exception:  # noqa: BLE001 — renderer-safety: graceful degradation
+                    use_renderer = False
+            yield chunk
+        if use_renderer:
+            with contextlib.suppress(Exception):  # noqa: BLE001 — renderer-safety
+                renderer.flush()
+
+    _patched_iter._fcio_patched = True  # ty: ignore[unresolved-attribute]
+    llm.Response.__iter__ = _patched_iter  # ty: ignore[invalid-assignment]
+
+
 # ── Model Registration ──────────────────────────────────
 
 
@@ -611,6 +651,37 @@ def register_embedding_models(register: Callable) -> None:
             )
 
 
+# ── Template System ────────────────────────────────────
+
+
+TEMPLATES = {
+    "review": (
+        "You are a senior code reviewer. Analyze the provided code files for bugs, "
+        "security vulnerabilities, performance issues, and maintainability problems. "
+        "For each issue found, specify the file, line range, and severity (critical/high/medium/low). "
+        "Suggest concrete fixes. Also highlight positive patterns and well-written code. "
+        "Structure your review by category: correctness, security, performance, readability."
+    ),
+    "overview": (
+        "You are a software architect providing a project overview. Analyze the provided "
+        "code files and describe: the project's purpose and domain, the overall architecture "
+        "and key components, the technology stack and dependencies, the code organization "
+        "and module structure, entry points and main flows. Identify architectural strengths "
+        "and areas for improvement. Be concise and focus on the big picture."
+    ),
+}
+
+
+def fcio_template_loader() -> dict[str, llm.Template]:
+    """Return fcio templates registered via llm's template loader hook."""
+    return {name: llm.Template(name=name, system=prompt) for name, prompt in TEMPLATES.items()}
+
+
+@llm.hookimpl
+def register_template_loaders(register: Callable) -> None:
+    register("fcio", fcio_template_loader)
+
+
 # ── Ingest Helpers ──────────────────────────────────────
 
 
@@ -622,6 +693,36 @@ _HARD_EXCLUDES = [
     ".git/",
     "*.egg-info/",
 ]
+
+_CODE_EXTENSIONS = frozenset(
+    {
+        ".py",
+        ".js",
+        ".ts",
+        ".tsx",
+        ".jsx",
+        ".go",
+        ".rs",
+        ".java",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".rb",
+        ".php",
+        ".sh",
+        ".bash",
+        ".sql",
+        ".html",
+        ".css",
+        ".scss",
+        ".toml",
+        ".yaml",
+        ".yml",
+        ".md",
+        ".rst",
+    }
+)
 
 
 def _discover_files(
@@ -648,6 +749,30 @@ def _discover_files(
                     all_files.append(candidate)
         else:
             raise click.ClickException(f"Path not found: {p}")
+    return all_files
+
+
+def collect_code_files(directory: Path) -> list[Path]:
+    """Collect code files from directory using extension whitelist and .gitignore filtering."""
+    resolved = directory.resolve()
+    if not resolved.is_dir():
+        return []
+    gitignore_path = resolved / ".gitignore"
+    spec_lines: list[str] = []
+    if gitignore_path.exists():
+        spec_lines = gitignore_path.read_text().splitlines()
+    spec_lines.extend(_HARD_EXCLUDES)
+    spec = pathspec.PathSpec.from_lines("gitwildmatch", spec_lines)
+
+    all_files: list[Path] = []
+    for candidate in sorted(resolved.rglob("*")):
+        if not candidate.is_file():
+            continue
+        if candidate.suffix not in _CODE_EXTENSIONS:
+            continue
+        rel = candidate.relative_to(resolved)
+        if not spec.match_file(str(rel)):
+            all_files.append(candidate)
     return all_files
 
 
@@ -1315,8 +1440,76 @@ def cmd_ingest(
     click.echo(f"Ingested {total_chunks} chunks into '{collection}'", err=True)
 
 
+# ── analyze ──────────────────────────────────────────────
+
+
+@fcio.command("analyze")
+@click.argument(
+    "analysis_type",
+    required=False,
+    default="review",
+    type=click.Choice(["review", "overview"]),
+)
+@click.argument("files", nargs=-1)
+@click.option("--model", default=None, help="Model to use for analysis")
+@click.pass_context
+def cmd_analyze(
+    ctx: click.Context,
+    analysis_type: str,
+    files: tuple[str, ...],
+    model: str | None,
+) -> None:
+    """Analyze code files with review or overview.
+
+    \b
+    Types:
+      review    Code review for bugs, security, and quality (default)
+      overview  Project architecture and component overview
+
+    \b
+    Examples:
+      llm fcio analyze              # Auto-detect and review code in CWD
+      llm fcio analyze review       # Review (same as default)
+      llm fcio analyze overview     # Project overview
+      llm fcio analyze review src/  # Review specific files/paths
+      llm fcio analyze --model 120b # Use specific model
+    """
+    resolved_files = [Path(f).resolve() for f in files] if files else collect_code_files(Path.cwd())
+
+    if not resolved_files:
+        click.echo(f"No code files found in {Path.cwd()}")
+        click.echo("Specify files explicitly or check file extensions")
+        ctx.exit(1)
+        return
+
+    # Display file list with sizes and token estimate (chars/4)
+    total_chars = 0
+    for f in resolved_files:
+        content = f.read_text()
+        chars = len(content)
+        total_chars += chars
+        tokens = chars // 4
+        size = f.stat().st_size
+        click.echo(f"  {f.name}  ({size}b, ~{tokens} tokens)")
+    total_tokens = total_chars // 4
+    click.echo(f"Total: ~{total_tokens} tokens from {len(resolved_files)} files")
+    click.echo()
+
+    # Build fragments from collected files
+    fragments = [llm.Fragment(content=f.read_text(), source=str(f)) for f in resolved_files]
+
+    # Get model (default if --model not specified)
+    m = llm.get_model(model)
+
+    # Prompt with template system and fragments
+    response = m.prompt(fragments=fragments, system=TEMPLATES[analysis_type])  # ty: ignore[invalid-argument-type]
+    for _chunk in response:
+        pass  # Trigger streaming (renderer handles display if TTY)
+
+
 @llm.hookimpl
 def register_commands(cli: click.Group) -> None:
+    install_renderer_patch()
     cli.add_command(fcio)
 
 

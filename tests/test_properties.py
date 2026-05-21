@@ -67,6 +67,9 @@ def test_chunk_lines_all_input_lines_covered(
 ) -> None:
     assume(overlap < chunk_size)
     assume("\r" not in text)
+    # splitlines() splits on Unicode line separators (\v, \x1e, \u2028, etc.)
+    # but "\n".join() only produces \n — so roundtrip fails for those chars
+    assume(all(c == "\n" or c not in "\v\f\x1c\x1d\x1e\x85\u2028\u2029" for c in text))
     lines = text.splitlines()
     if not lines:
         return

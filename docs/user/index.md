@@ -52,6 +52,20 @@ llm similar my-project -c "how does error handling work"
 
 See [CLI Reference](cli-reference.md#llm-fcio-ingest) for chunking options and multi-format workflows.
 
+### Analyze your code
+
+```bash
+# Code review of the current project
+llm fcio analyze
+
+# Project overview
+llm fcio analyze overview
+```
+
+Zero-config: scans the current directory for code files and sends them to the model. Pass specific files or globs to narrow the scope.
+
+See [CLI Reference](cli-reference.md#llm-fcio-analyze) for analysis types, templates, and options.
+
 ### See available models
 
 ```bash
