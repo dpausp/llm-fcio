@@ -6,6 +6,7 @@ HTTP-boundary mocking via respx; only non-HTTP code runs unmocked.
 """
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -576,7 +577,7 @@ def test_ingest_single_file(
     tmp_path: Path,
 ) -> None:
     mock_user_dir.return_value = tmp_path
-    # Cannot use spec=llm.Collection: llm is plugin-based, Collection resolves to MagicMock at import → InvalidSpecError
+    # spec=llm.Collection not possible: llm is plugin-based, Collection is MagicMock at import
     mock_col = MagicMock()
     mock_col.model.return_value.model_id = "bge-m3-567m"
     mock_collection_cls.exists.return_value = False
@@ -603,7 +604,7 @@ def test_ingest_multiple_files(
     tmp_path: Path,
 ) -> None:
     mock_user_dir.return_value = tmp_path
-    # Cannot use spec=llm.Collection: llm is plugin-based, Collection resolves to MagicMock at import → InvalidSpecError
+    # spec=llm.Collection not possible: llm is plugin-based, Collection is MagicMock at import
     mock_col = MagicMock()
     mock_col.model.return_value.model_id = "bge-m3-567m"
     mock_collection_cls.exists.return_value = False
@@ -635,7 +636,7 @@ def test_ingest_chunk_options(
     tmp_path: Path,
 ) -> None:
     mock_user_dir.return_value = tmp_path
-    # Cannot use spec=llm.Collection: llm is plugin-based, Collection resolves to MagicMock at import → InvalidSpecError
+    # spec=llm.Collection not possible: llm is plugin-based, Collection is MagicMock at import
     mock_col = MagicMock()
     mock_col.model.return_value.model_id = "bge-m3-567m"
     mock_collection_cls.exists.return_value = False
@@ -895,7 +896,7 @@ def test_resolve_model_fzf_pick(runner: CliRunner, cli: click.Group) -> None:
         patch("shutil.which", return_value="/usr/bin/fzf"),
         patch(
             "subprocess.run",
-            return_value=MagicMock(stdout="gpt-oss:20b\n"),
+            return_value=MagicMock(spec=subprocess.CompletedProcess, stdout="gpt-oss:20b\n"),
         ),
     ):
         _setup_models_route()
@@ -915,7 +916,7 @@ def test_resolve_model_fzf_empty_pick_fallback(runner: CliRunner, cli: click.Gro
         patch("shutil.which", return_value="/usr/bin/fzf"),
         patch(
             "subprocess.run",
-            return_value=MagicMock(stdout="\n"),
+            return_value=MagicMock(spec=subprocess.CompletedProcess, stdout="\n"),
         ),
     ):
         _setup_models_route()
@@ -1201,6 +1202,7 @@ def test_ingest_with_confirmation_dialog(
 ) -> None:
     """Covers the confirmation dialog branch (lines 1270-1278)."""
     mock_user_dir.return_value = tmp_path
+    # spec=llm.Collection not possible: llm is plugin-based, Collection is MagicMock at import
     mock_col = MagicMock()
     mock_col.model.return_value.model_id = "bge-m3-567m"
     mock_collection_cls.exists.return_value = False
@@ -1229,9 +1231,10 @@ def test_ingest_existing_collection(
 ) -> None:
     """Covers existing collection path (line 1283: col = llm.Collection(collection, db))."""
     mock_user_dir.return_value = tmp_path
+    # spec=llm.Collection not possible: llm is plugin-based, Collection is MagicMock at import
     mock_col = MagicMock()
     mock_col.model.return_value.model_id = "bge-m3-567m"
-    mock_collection_cls.exists.return_value = True
+    mock_collection_cls.exists.return_value = False
     mock_collection_cls.return_value = mock_col
 
     doc = tmp_path / "test.md"
@@ -1255,6 +1258,7 @@ def test_ingest_tracked_generator_consumed(
 ) -> None:
     """Covers _tracked() generator body (lines 1303-1308) by consuming the iterator."""
     mock_user_dir.return_value = tmp_path
+    # spec=llm.Collection not possible: llm is plugin-based, Collection is MagicMock at import
     mock_col = MagicMock()
     mock_col.model.return_value.model_id = "bge-m3-567m"
     mock_collection_cls.exists.return_value = False
@@ -1385,6 +1389,7 @@ def test_ingest_confirmation_abort(
 ) -> None:
     """Covers abort path in confirmation dialog (line 1278)."""
     mock_user_dir.return_value = tmp_path
+    # spec=llm.Collection not possible: llm is plugin-based, Collection is MagicMock at import
     mock_col = MagicMock()
     mock_col.model.return_value.model_id = "bge-m3-567m"
     mock_collection_cls.exists.return_value = False

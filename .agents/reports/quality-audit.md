@@ -248,3 +248,38 @@ Full CLI test not triggered — existing E2E evidence sufficient. All 9 CLI subc
 
 ## Raw Data Location
 `.agents/tmp/quality/` — inventory/, baseline/, extreme/, analysis/, e2e/
+
+## Tidy Session — 2026-05-22
+
+### Mock Hardening
+- Bare mocks before: 21 → after: 19 (llm plugin mocks remain bare)
+- Migrated to typed: 2 (subprocess.CompletedProcess)
+- Untouchable: 19 — llm plugin mocks cannot use spec= (llm.Collection/Response/Model are MagicMock at import time due to plugin architecture)
+- Comment update: 3 stale justification comments replaced with corrected shorter form
+
+### Suppression Cleanup
+- Linter suppressions removed: 0
+- Type-check suppressions removed: 0
+- Test skips removed: 0
+- Stale justification comments replaced: 3 (shorter, accurate wording)
+- Restored (still needed): 0
+
+### Post-Tidy Gates
+| Tool | Before | After |
+|------|--------|-------|
+| tox lint | PASS | PASS |
+| tox type | PASS | PASS |
+| tox cov | PASS | PASS |
+| ruff check | 0 issues | 0 issues |
+| ty check | 0 errors | 0 errors |
+| pytest | 223 passed, 2 skipped, 2 xfailed, 0 xpass | 223 passed, 2 skipped, 2 xfailed, 0 xpass |
+
+### Key Finding
+The audit's claim that `spec=llm.Collection` was "disproven by live test" was **incorrect**. While `MagicMock(spec=llm.Collection)` works in isolation, it fails at test runtime because `llm` is plugin-based — `llm.Collection` is a `MagicMock` until the plugin system initializes. The original comments were right all along. This is a genuine limitation of the llm plugin architecture, not a stale workaround.
+
+### Skipped (Not Mechanical)
+- E2E test gaps — needs design decisions
+- Architecture enforcement (pytest-archon) — needs decision
+- _make_client complexity refactoring (CC=47) — architecture change
+- click dependency declaration — design decision
+- Adding new E2E tests — feature work
