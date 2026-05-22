@@ -77,7 +77,7 @@ def test_chunk_lines_all_input_lines_covered(
     # Collect all lines from all chunks
     covered_lines: list[str] = []
     for _, chunk_text in result:
-        covered_lines.extend(chunk_text.splitlines())
+        covered_lines.extend(chunk_text.split("\n"))
     assert covered_lines == lines
 
 

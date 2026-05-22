@@ -1,8 +1,8 @@
 """Contract tests for dependency hardening modernization spec.
 
-All tests are marked xfail — they should pass after Phase 2 implementation
-adds version constraints, security tooling, narrows exception catches,
-and removes the migration shim.
+Tests for version constraints, security tooling, and migration shim removal
+are now passing (contracts fulfilled). Exception narrowing tests remain xfail
+until the renderer error handling is redesigned.
 """
 
 import inspect
@@ -25,7 +25,6 @@ REQUIRED_DEPS = {
 # ── 1. Dependency Version Constraints ────────────────────────────
 
 
-@pytest.mark.xfail(reason="modernization contract")
 def test_all_deps_have_version_constraints(pyproject_toml: dict) -> None:
     """Every declared dependency must have a version specifier."""
     deps = pyproject_toml["project"]["dependencies"]
@@ -35,7 +34,6 @@ def test_all_deps_have_version_constraints(pyproject_toml: dict) -> None:
         )
 
 
-@pytest.mark.xfail(reason="modernization contract")
 @pytest.mark.parametrize("dep_name,min_version", list(REQUIRED_DEPS.items()))
 def test_dep_minimum_version(pyproject_toml: dict, dep_name: str, min_version: str) -> None:
     """Each dependency must declare a minimum version >= the specified floor."""
@@ -57,7 +55,6 @@ def test_dep_minimum_version(pyproject_toml: dict, dep_name: str, min_version: s
 # ── 2. Security Audit Tooling ────────────────────────────────────
 
 
-@pytest.mark.xfail(reason="modernization contract")
 def test_pip_audit_in_dev_deps(pyproject_toml: dict) -> None:
     """pip-audit must be in the dev dependency group with a version constraint."""
     dev_deps = pyproject_toml["dependency-groups"]["dev"]
@@ -95,7 +92,6 @@ def test_no_ble001_noqa_annotations() -> None:
 # ── 4. Migration Shim Removal ────────────────────────────────────
 
 
-@pytest.mark.xfail(reason="modernization contract")
 def test_no_string_migration_shim() -> None:
     """_load_models must not contain code migrating string-only cache to dict format."""
     from llm_fcio import _load_models
@@ -106,7 +102,6 @@ def test_no_string_migration_shim() -> None:
     )
 
 
-@pytest.mark.xfail(reason="modernization contract")
 def test_no_migration_write_back() -> None:
     """_load_models must not write back migrated data to cache."""
     from llm_fcio import _load_models
