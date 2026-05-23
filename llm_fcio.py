@@ -106,6 +106,50 @@ def get_api_key(loc: Location) -> str:
     return key
 
 
+def _mask_auth_header(name: str, value: str) -> str:
+    """Mask Authorization header values, pass through all others."""
+    if name.lower() == "authorization":
+        return "Bearer sk-***..."
+    return value
+
+
+def _log_request_body(content: bytes) -> None:
+    """Log request body: JSON pretty-print or raw with truncation."""
+    try:
+        body = json.loads(content)
+        pretty = json.dumps(body, indent=2)
+        _debug_console.print(Syntax(pretty, "json", theme="monokai", line_numbers=False))
+    except json.JSONDecodeError, UnicodeDecodeError:
+        raw = content.decode("utf-8", errors="replace")
+        if len(raw) > 500:
+            raw = raw[:500] + "..."
+        _debug_console.print(raw)
+
+
+def _log_response_body(response: httpx.Response) -> None:
+    """Log response body: SSE skip, JSON pretty-print, or raw with truncation."""
+    ct = response.headers.get("content-type", "")
+    if "text/event-stream" in ct:
+        _debug_console.print("  [dim]Response: SSE stream[/dim]")
+        return
+    try:
+        body_text = response.text
+        if not body_text:
+            return
+        try:
+            body_json = json.loads(body_text)
+            pretty = json.dumps(body_json, indent=2)
+            if len(pretty) > 2000:
+                pretty = pretty[:2000] + "\n... (truncated)"
+            _debug_console.print(Syntax(pretty, "json", theme="monokai", line_numbers=False))
+        except json.JSONDecodeError, UnicodeDecodeError:
+            if len(body_text) > 500:
+                body_text = body_text[:500] + "... (truncated)"
+            _debug_console.print(body_text)
+    except ValueError, OSError, RuntimeError:
+        _debug_console.print("  [dim](body not available)[/dim]")
+
+
 def _make_client(
     *, verbose: bool = False, debug: bool = False, timeout: float = 30.0
 ) -> httpx.Client:
@@ -123,20 +167,9 @@ def _make_client(
                 f"[bold blue]\u2192[/bold blue] {request.method} {request.url.path}"
             )
             for name, value in request.headers.items():
-                display_value = "Bearer sk-***..." if name.lower() == "authorization" else value
-                _debug_console.print(f"  [dim]{name}:[/dim] {display_value}")
+                _debug_console.print(f"  [dim]{name}:[/dim] {_mask_auth_header(name, value)}")
             if request.content:
-                try:
-                    body = json.loads(request.content)
-                    pretty = json.dumps(body, indent=2)
-                    _debug_console.print(
-                        Syntax(pretty, "json", theme="monokai", line_numbers=False)
-                    )
-                except json.JSONDecodeError, UnicodeDecodeError:
-                    raw = request.content.decode("utf-8", errors="replace")
-                    if len(raw) > 500:
-                        raw = raw[:500] + "..."
-                    _debug_console.print(raw)
+                _log_request_body(request.content)
 
     def _on_response(response: httpx.Response) -> None:
         if verbose:
@@ -145,33 +178,61 @@ def _make_client(
             )
             for name, value in response.headers.items():
                 _debug_console.print(f"  [dim]{name}:[/dim] {value}")
-            ct = response.headers.get("content-type", "")
-            if "text/event-stream" in ct:
-                _debug_console.print("  [dim]Response: SSE stream[/dim]")
-                return
-            try:
-                body_text = response.text
-                if not body_text:
-                    return
-                try:
-                    body_json = json.loads(body_text)
-                    pretty = json.dumps(body_json, indent=2)
-                    if len(pretty) > 2000:
-                        pretty = pretty[:2000] + "\n... (truncated)"
-                    _debug_console.print(
-                        Syntax(pretty, "json", theme="monokai", line_numbers=False)
-                    )
-                except json.JSONDecodeError, UnicodeDecodeError:
-                    if len(body_text) > 500:
-                        body_text = body_text[:500] + "... (truncated)"
-                    _debug_console.print(body_text)
-            except ValueError, OSError, RuntimeError:
-                _debug_console.print("  [dim](body not available)[/dim]")
+            _log_response_body(response)
 
     return httpx.Client(
         timeout=timeout,
         event_hooks={"request": [_on_request], "response": [_on_response]},
     )
+
+
+def _auth_headers(key: str) -> dict[str, str]:
+    """Build Authorization Bearer + JSON content-type headers."""
+    return {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+
+def _build_messages(
+    prompt: llm.Prompt,
+    conversation: llm.Conversation | None,
+) -> list[dict]:
+    """Build the messages list from prompt and conversation history."""
+    messages: list[dict] = []
+    if prompt.system:
+        messages.append({"role": "system", "content": prompt.system})
+    if conversation:
+        for r in conversation.responses:
+            if r.prompt.system:
+                messages.append({"role": "system", "content": r.prompt.system})
+            if r.prompt.prompt:
+                messages.append({"role": "user", "content": r.prompt.prompt})
+            messages.append({"role": "assistant", "content": r.text_or_raise()})  # ty: ignore[unresolved-attribute]
+    # Build user message with attachments
+    user_content_parts: list[dict] = []
+    for att in prompt.attachments or []:
+        att_type = att.resolve_type()
+        if att_type == "text/plain":
+            text = att.content_bytes().decode("utf-8")
+            user_content_parts.append({"type": "text", "text": text})
+    if prompt.prompt:
+        user_content_parts.append({"type": "text", "text": prompt.prompt})
+    if user_content_parts:
+        content = (
+            user_content_parts[0]["text"] if len(user_content_parts) == 1 else user_content_parts
+        )
+        messages.append({"role": "user", "content": content})
+    return messages
+
+
+def _extract_content(data: dict) -> str:
+    """Extract content from API response data, raising on empty/missing choices."""
+    choices = data.get("choices") or []
+    if not choices:
+        raise ApiError("Empty response from API - no choices returned")
+    msg = choices[0].get("message") or {}
+    return msg.get("content") or ""
 
 
 def api_request(
@@ -184,11 +245,8 @@ def api_request(
 ) -> httpx.Response:
     """Generic API request helper mit Auth + Error-Handling"""
     url = f"{api_base}/{path.lstrip('/')}"
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
+    headers = _auth_headers(key)
+    headers["Accept"] = "application/json"
 
     with _make_client(verbose=_VERBOSE, debug=_DEBUG, timeout=30.0) as client:
         response = client.request(
@@ -349,32 +407,7 @@ class RzobModel(llm.KeyModel):
         conversation: llm.Conversation | None,
         key: str | None,
     ) -> Iterator[str]:
-        messages = []
-        if prompt.system:
-            messages.append({"role": "system", "content": prompt.system})
-        if conversation:
-            for r in conversation.responses:
-                if r.prompt.system:
-                    messages.append({"role": "system", "content": r.prompt.system})
-                if r.prompt.prompt:
-                    messages.append({"role": "user", "content": r.prompt.prompt})
-                messages.append({"role": "assistant", "content": r.text_or_raise()})  # ty: ignore[unresolved-attribute]
-        # Build user message with attachments
-        user_content_parts = []
-        for att in prompt.attachments or []:
-            att_type = att.resolve_type()
-            if att_type == "text/plain":
-                text = att.content_bytes().decode("utf-8")
-                user_content_parts.append({"type": "text", "text": text})
-        if prompt.prompt:
-            user_content_parts.append({"type": "text", "text": prompt.prompt})
-        if user_content_parts:
-            content = (
-                user_content_parts[0]["text"]
-                if len(user_content_parts) == 1
-                else user_content_parts
-            )
-            messages.append({"role": "user", "content": content})
+        messages = _build_messages(prompt, conversation)
 
         body: dict[str, Any] = {"model": self.api_id, "messages": messages}
         if prompt.options.temperature is not None:  # ty: ignore[unresolved-attribute]
@@ -388,10 +421,11 @@ class RzobModel(llm.KeyModel):
         if prompt.options.response_format is not None:  # ty: ignore[unresolved-attribute]
             body["response_format"] = prompt.options.response_format  # ty: ignore[unresolved-attribute]
 
-        headers = {
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        }
+        if key is None:
+            key = self.get_key()
+        if key is None:
+            raise ValueError("API key required — set via 'llm keys set fcio-rzob'")
+        headers = _auth_headers(key)
 
         api_base = self._location.api_base
         if stream:
@@ -410,13 +444,7 @@ class RzobModel(llm.KeyModel):
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                choices = data.get("choices") or []
-                if not choices:
-                    raise ApiError(
-                        "Empty response from API - no choices returned",
-                    )
-                msg = choices[0].get("message") or {}
-                content = msg.get("content") or ""
+                content = _extract_content(data)
                 yield content
                 response.response_json = data
 
@@ -436,14 +464,13 @@ class RzobEmbeddingModel(llm.EmbeddingModel):
 
     def embed_batch(self, items: Iterable[str | bytes]) -> Iterator[list[float]]:
         key = self.get_key()
+        if key is None:
+            raise ValueError("API key required — set via 'llm keys set fcio-rzob'")
         api_base = self._location.api_base
         with _make_client(verbose=_VERBOSE, debug=_DEBUG, timeout=30.0) as client:
             resp = client.post(
                 f"{api_base}/embeddings",
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                },
+                headers=_auth_headers(key),
                 json={"model": self.api_id, "input": list(items)},
             )
             resp.raise_for_status()
@@ -1532,6 +1559,28 @@ def _build_chat_body(
     return body
 
 
+def _stream_chat_response(key: str, body: dict, api_base: str, render: bool) -> None:
+    """Stream chat response with optional rich rendering."""
+    try:
+        renderer = _StreamingRenderer() if render else None
+        with _make_client(verbose=_VERBOSE, debug=_DEBUG) as client:
+            url = f"{api_base}/chat/completions"
+            headers = _auth_headers(key)
+            for content in _iter_sse_content(client, url, headers, body):
+                if render and renderer is not None:
+                    renderer.feed(content)
+                else:
+                    click.echo(content, nl=False)
+        if render and renderer is not None:
+            renderer.flush()
+        else:
+            click.echo()
+    except ApiError:
+        raise
+    except httpx.HTTPError as e:
+        raise ApiError(f"Streaming error: {e}") from e
+
+
 def _send_chat_request(
     key: str,
     body: dict,
@@ -1542,37 +1591,14 @@ def _send_chat_request(
 ) -> None:
     if stream:
         body["stream"] = True
-        try:
-            renderer = _StreamingRenderer() if render else None
-            with _make_client(verbose=_VERBOSE, debug=_DEBUG) as client:
-                url = f"{api_base}/chat/completions"
-                sse_headers = {
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                }
-                for content in _iter_sse_content(client, url, sse_headers, body):
-                    if render and renderer is not None:
-                        renderer.feed(content)
-                    else:
-                        click.echo(content, nl=False)
-            if render and renderer is not None:
-                renderer.flush()
-            else:
-                click.echo()
-        except ApiError:
-            raise
-        except httpx.HTTPError as e:
-            raise ApiError(f"Streaming error: {e}") from e
+        _stream_chat_response(key, body, api_base, render)
     else:
         resp = api_request("POST", "/chat/completions", key, api_base, json_data=body)
         data = resp.json()
-        choices = data.get("choices", [])
-        if not choices:
-            raise ApiError("Empty response from API - no choices returned")
+        content = _extract_content(data)
         if as_json:
             click.echo(json.dumps(data, indent=2))
         else:
-            content = choices[0]["message"].get("content", "")
             click.echo(content)
             if "usage" in data:
                 u = data["usage"]
