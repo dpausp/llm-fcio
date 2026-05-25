@@ -589,10 +589,15 @@ def test_register_models_from_cache(cached_models: list[dict], user_dir: Path) -
 
 
 def test_register_models_empty_cache(user_dir: Path) -> None:
-    """register_models with no cache file registers nothing."""
+    """register_models with no cache fallbackt auf _HARD_CODED_MODELS."""
     registered: list[object] = []
     register_models(lambda m, **kw: registered.append(m))
-    assert registered == []
+    # 3 locations × 2 hard-coded chat models = 6
+    assert len(registered) == 6
+    model_ids = [m.model_id for m in registered]
+    assert "fcio-rzob/gpt-oss-20b" in model_ids
+    assert "fcio-dev/gpt-oss-120b" in model_ids
+    assert "fcio-whq/gpt-oss-20b" in model_ids
 
 
 def test_register_models_includes_aliases(cached_models: list[dict], user_dir: Path) -> None:
@@ -618,10 +623,15 @@ def test_register_embedding_models_filters(cached_models: list[dict], user_dir: 
 
 
 def test_register_embedding_models_empty_cache(user_dir: Path) -> None:
-    """register_embedding_models with no cache registers nothing."""
+    """register_embedding_models with no cache fallbackt auf _HARD_CODED_MODELS."""
     registered: list[object] = []
     register_embedding_models(lambda m, **kw: registered.append(m))
-    assert registered == []
+    # 3 locations × 3 hard-coded embedding models = 9
+    assert len(registered) == 9
+    model_ids = [m.model_id for m in registered]
+    assert "fcio-rzob/bge-m3-567m" in model_ids
+    assert "fcio-dev/nomic-embed-text-v1_5" in model_ids
+    assert "fcio-whq/embeddinggemma-300m" in model_ids
 
 
 # ── _load_models ──────────────────────────────────────────────
