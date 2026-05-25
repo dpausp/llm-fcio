@@ -368,6 +368,7 @@ def _resolve_model(model_hint: str, key: str, api_base: str) -> str:
 
 class RzobModel(llm.KeyModel):
     can_stream = True
+    supports_schema = True
     attachment_types = {"text/plain"}  # noqa: RUF012
 
     class Options(llm.Options):
@@ -430,6 +431,11 @@ class RzobModel(llm.KeyModel):
             body["tools"] = prompt.options.tools  # ty: ignore[unresolved-attribute]
         if prompt.options.response_format is not None:  # ty: ignore[unresolved-attribute]
             body["response_format"] = prompt.options.response_format  # ty: ignore[unresolved-attribute]
+        if prompt.schema:  # ty: ignore[unresolved-attribute]
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "response", "schema": prompt.schema},
+            }
 
         if key is None:
             key = self.get_key()
@@ -982,6 +988,15 @@ def get_capabilities(loc_name: str = DEFAULT_LOCATION) -> dict:
         "/embeddings",
         body={"model": "_probe_test", "input": "test"},
     )
+    schema_status = _probe_endpoint(
+        "POST",
+        "/chat/completions",
+        body={
+            "model": "_probe_test",
+            "messages": [{"role": "user", "content": "."}],
+            "response_format": {"type": "json_object"},
+        },
+    )
 
     return {
         "endpoint": {
@@ -1013,6 +1028,7 @@ def get_capabilities(loc_name: str = DEFAULT_LOCATION) -> dict:
                 "param": "stream",
             },
             "embeddings": {"status": embed_status, "method": "POST", "path": "/embeddings"},
+            "schema_output": {"status": schema_status, "method": "POST", "path": "/chat/completions", "param": "response_format"},
         },
     }
 
@@ -1380,6 +1396,7 @@ def cmd_capabilities(ctx: click.Context, as_json: bool) -> None:
     click.echo("Features:")
     click.echo(f"  Chat completions:  {_status_icon(feats['chat_completions']['status'])} (POST /chat/completions)")
     click.echo(f"  Streaming:         {_status_icon(feats['streaming']['status'])} (POST /chat/completions, stream)")
+    click.echo(f"  Schema output:     {_status_icon(feats['schema_output']['status'])} (POST /chat/completions, response_format)")
     click.echo(f"  Embeddings:        {_status_icon(feats['embeddings']['status'])} (POST /embeddings)")
 
     # ── simulate ────────────────────────────────────────────
