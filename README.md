@@ -39,6 +39,21 @@ llm fcio -l dev refresh           # refresh models for dev location
 - You need built-in rate limit handling — the plugin sends requests directly; rate limit errors surface as raw API errors.
 - You need function calling from the CLI — the model options support it, but there is no CLI interface for tool definitions.
 
+## Python API
+
+All plugin functions are directly importable — no Click context, no I/O side effects.
+
+```python
+import llm_fcio as fcio
+
+models = fcio.refresh_models()
+caps = fcio.get_capabilities()
+count = fcio.ingest_files("mydocs", "./docs/", glob="*.md")
+result = fcio.analyze_code("review", files=["src/main.py"])
+```
+
+→ [Python API Reference](docs/user/python-api.md) for all functions and parameters.
+
 ## Full documentation
 
 → [CLI Reference](docs/user/cli-reference.md) for all commands, flags, and options.

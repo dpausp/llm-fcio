@@ -1492,6 +1492,9 @@ def cmd_tokens(ctx: click.Context, text: tuple[str], model_id: str, as_json: boo
 
     if as_json:
         click.echo(json.dumps(result, indent=2))
+    elif result.get("_fallback"):
+        click.echo(f"\u26a0\ufe0f  Token endpoint not supported, using heuristic", err=True)
+        click.echo(f"Rough estimate: ~{result.get('prompt_tokens', '?')} tokens (heuristic)")
     else:
         click.echo(f"Model: {model_id}")
         click.echo(f"Tokens: {result.get('prompt_tokens', '?')}")
@@ -1558,28 +1561,42 @@ def cmd_ingest(
     """
     loc_name: str = ctx.obj["location"].name
 
+    resolved_paths = tuple(Path(p) for p in paths)
+
     if not skip_confirm:
-        resolved_paths = tuple(Path(p) for p in paths)
         files = _discover_files(resolved_paths, glob_pattern)
         if not files:
             raise click.ClickException("No files found matching criteria")
-        total_chunks = sum(
-            len(_chunk_lines(f.read_text(errors="replace"), str(f), chunk_size, overlap))
-            for f in files
-        )
-        click.echo(f"Files: {len(files)}, Chunks: {total_chunks}")
+        # Build chunk map for preview
+        file_chunks: dict[str, list[tuple[str, str]]] = {}
+        for f in files:
+            text = f.read_text(errors="replace")
+            display_path = str(f)
+            chunks = _chunk_lines(text, display_path, chunk_size, overlap)
+            if chunks:
+                file_chunks[display_path] = chunks
+        total_chunks = sum(len(cs) for cs in file_chunks.values())
+        click.echo("Files to ingest:")
+        max_name_len = max(len(n) for n in file_chunks)
+        for name, chunks in file_chunks.items():
+            padded = name.ljust(max_name_len)
+            click.echo(f"  {padded}  {len(chunks)} chunks")
+        click.echo(f"Total: {len(file_chunks)} files, {total_chunks} chunks")
+        click.echo()
         if not click.confirm("Continue", default=False):
             raise click.ClickException("Aborted")
 
     total = ingest_files(
         collection,
-        list(paths),
+        list(resolved_paths),
         glob=glob_pattern,
         model_id=model_id,
         chunk_size=chunk_size,
         overlap=overlap,
         loc_name=loc_name,
     )
+    if total == 0:
+        raise click.ClickException("No files found matching criteria")
     click.echo(f"Ingested {total} chunks into '{collection}'", err=True)
 
 
@@ -1618,8 +1635,29 @@ def cmd_analyze(
       llm fcio analyze --model 120b # Use specific model
     """
     loc_name: str = ctx.obj["location"].name
-    file_list = list(files) if files else None
-    text = analyze_code(analysis_type, file_list, model, loc_name)
+
+    # Resolve files — CLI-only preview
+    resolved_files = [Path(f).resolve() for f in files] if files else collect_code_files(Path.cwd())
+    if not resolved_files:
+        click.echo(f"No code files found in {Path.cwd()}")
+        click.echo("Specify files explicitly or check file extensions")
+        ctx.exit(1)
+        return
+
+    # Display file list with sizes and token estimate
+    total_chars = 0
+    for f in resolved_files:
+        content = f.read_text()
+        chars = len(content)
+        total_chars += chars
+        tokens = chars // 4
+        size = f.stat().st_size
+        click.echo(f"  {f.name}  ({size}b, ~{tokens} tokens)")
+    total_tokens = total_chars // 4
+    click.echo(f"Total: ~{total_tokens} tokens from {len(resolved_files)} files")
+    click.echo()
+
+    text = analyze_code(analysis_type, [str(f) for f in resolved_files], model, loc_name)
     click.echo(text)
 
 

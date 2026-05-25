@@ -84,4 +84,5 @@ llm fcio models --filter oss
 :hidden:
 
 cli-reference
+python-api
 ```
