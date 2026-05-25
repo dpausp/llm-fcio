@@ -658,7 +658,7 @@ _SHORT_EMBED_ALIASES = {
 def register_models(register: Callable) -> None:
     chat_keywords = ("gpt", "llama", "qwen", "mistral", "chat", "claude", "deepseek")
     for loc_name, loc in LOCATIONS.items():
-        models = _HARD_CODED_MODELS if loc_name == DEFAULT_LOCATION else _load_models(loc_name)
+        models = _load_models(loc_name) or _HARD_CODED_MODELS
         for m in models:
             mid = m["id"]
             if not any(k in mid.lower() for k in chat_keywords):
@@ -676,7 +676,7 @@ def register_models(register: Callable) -> None:
 def register_embedding_models(register: Callable) -> None:
     embed_keywords = ("embed", "bge", "gemma")
     for loc_name, loc in LOCATIONS.items():
-        models = _HARD_CODED_MODELS if loc_name == DEFAULT_LOCATION else _load_models(loc_name)
+        models = _load_models(loc_name) or _HARD_CODED_MODELS
         for m in models:
             mid = m["id"]
             if not any(k in mid.lower() for k in embed_keywords):
