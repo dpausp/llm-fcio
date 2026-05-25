@@ -839,6 +839,283 @@ def _chunk_lines(
     return chunks
 
 
+# ── Public API ──────────────────────────────────────────
+
+
+def refresh_models(loc_name: str = DEFAULT_LOCATION) -> list[dict]:
+    """Fetch available models from API and cache locally.
+
+    Returns list of model dicts with 'id' and 'safe_id' keys.
+    """
+    loc = LOCATIONS[loc_name]
+    key = get_api_key(loc)
+    resp = api_request("GET", "/models", key, loc.api_base)
+    raw = resp.json()
+    data = raw.get("data", raw if isinstance(raw, list) else [])
+    models: list[dict] = []
+    for m in data:
+        mid = m["id"] if isinstance(m, dict) else str(m)
+        models.append(
+            {
+                "id": mid,
+                "safe_id": mid.replace(":", "-").replace(".", "_"),
+            },
+        )
+    _cache_path(loc.name).write_text(json.dumps(models, indent=2))
+    return models
+
+
+def list_models(
+    loc_name: str = DEFAULT_LOCATION,
+    filter: str | None = None,
+) -> list[dict]:
+    """List available models from API.
+
+    Returns raw model data from the API. Optional substring filter
+    applied client-side.
+    """
+    loc = LOCATIONS[loc_name]
+    key = get_api_key(loc)
+    resp = api_request("GET", "/models", key, loc.api_base)
+    models = resp.json().get("data", [])
+    if filter:
+        models = [m for m in models if filter.lower() in m.get("id", "").lower()]
+    return models
+
+
+def get_model_info(model_id: str, loc_name: str = DEFAULT_LOCATION) -> dict:
+    """Show details for a specific model.
+
+    Raises ModelError on 404.
+    """
+    loc = LOCATIONS[loc_name]
+    key = get_api_key(loc)
+    try:
+        resp = api_request("GET", f"/models/{model_id}", key, loc.api_base)
+    except ApiError as e:
+        if e.status_code == 404:
+            raise ModelError(f"Model not found: {model_id}") from e
+        raise
+    return resp.json().get("data", resp.json())
+
+
+def get_cached_models(loc_name: str = DEFAULT_LOCATION) -> list[dict]:
+    """Read cached models without calling the API."""
+    return _load_models(loc_name)
+
+
+def get_capabilities(loc_name: str = DEFAULT_LOCATION) -> dict:
+    """Probe endpoint capabilities and return structured result.
+
+    Returns dict with ``endpoint``, ``models`` (with counts),
+    and ``features`` (probe status per endpoint).
+    """
+    loc = LOCATIONS[loc_name]
+    key = get_api_key(loc)
+
+    auth_status = "valid"
+    models_data: list[dict] = []
+    try:
+        resp = api_request("GET", "/models", key, loc.api_base)
+        models_data = resp.json().get("data", [])
+    except ApiError as e:
+        auth_status = str(e)
+
+    embed_keywords = ("embed", "bge", "gemma")
+    chat_keywords = ("gpt", "llama", "qwen", "mistral", "chat", "claude", "deepseek")
+    chat_models: list[dict] = []
+    embed_models: list[dict] = []
+    other_models: list[dict] = []
+    for m in models_data:
+        mid = m["id"]
+        if any(k in mid.lower() for k in embed_keywords):
+            embed_models.append(m)
+        elif any(k in mid.lower() for k in chat_keywords):
+            chat_models.append(m)
+        else:
+            other_models.append(m)
+
+    def _probe_endpoint(
+        method: str,
+        path: str,
+        body: dict | None = None,
+        model_error_marker: str = "model",
+    ) -> str:
+        try:
+            api_request(method, path, key, loc.api_base, json_data=body)
+            return "available"
+        except ApiError as e:
+            if e.status_code and model_error_marker in str(e).lower():
+                return "available"
+            if e.status_code == httpx.codes.UNAUTHORIZED:
+                return "auth failed"
+            return str(e)
+
+    chat_status = _probe_endpoint(
+        "POST",
+        "/chat/completions",
+        body={"model": "_probe_test", "messages": [{"role": "user", "content": "."}]},
+    )
+    streaming_status = _probe_endpoint(
+        "POST",
+        "/chat/completions",
+        body={
+            "model": "_probe_test",
+            "messages": [{"role": "user", "content": "."}],
+            "stream": True,
+        },
+    )
+    embed_status = _probe_endpoint(
+        "POST",
+        "/embeddings",
+        body={"model": "_probe_test", "input": "test"},
+    )
+
+    return {
+        "endpoint": {
+            "name": loc.name,
+            "api_base": loc.api_base,
+            "auth": auth_status,
+        },
+        "models": {
+            "chat": chat_models,
+            "embedding": embed_models,
+            "other": other_models,
+            "counts": {
+                "chat": len(chat_models),
+                "embedding": len(embed_models),
+                "other": len(other_models),
+                "total": len(models_data),
+            },
+        },
+        "features": {
+            "chat_completions": {
+                "status": chat_status,
+                "method": "POST",
+                "path": "/chat/completions",
+            },
+            "streaming": {
+                "status": streaming_status,
+                "method": "POST",
+                "path": "/chat/completions",
+                "param": "stream",
+            },
+            "embeddings": {"status": embed_status, "method": "POST", "path": "/embeddings"},
+        },
+    }
+
+
+def estimate_tokens(
+    text: str,
+    model_id: str = "gpt-oss:20b",
+    loc_name: str = DEFAULT_LOCATION,
+) -> dict:
+    """Estimate token count for text via API.
+
+    Falls back to ``len(text) // 4`` heuristic when the endpoint
+    does not support tokenisation. The result includes a
+    ``_fallback: True`` key in that case.
+    """
+    loc = LOCATIONS[loc_name]
+    key = get_api_key(loc)
+    body = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": text}],
+        "max_tokens": 1,
+    }
+    try:
+        resp = api_request("POST", "/chat/completions", key, loc.api_base, json_data=body)
+        data = resp.json()
+        return data.get("usage", {})
+    except ApiError:
+        total_chars = len(text)
+        return {"prompt_tokens": total_chars // 4, "_fallback": True}
+
+
+def ingest_files(
+    collection: str,
+    paths: str | Path | list[str | Path],
+    *,
+    glob: str = "*.md",
+    model_id: str = "bge-m3-567m",
+    chunk_size: int = 30,
+    overlap: int = 5,
+    loc_name: str = DEFAULT_LOCATION,
+) -> int:
+    """Chunk and embed files into an ``llm`` embedding collection.
+
+    Returns total number of chunks ingested.
+    """
+    if isinstance(paths, (str, Path)):
+        paths = [paths]
+    resolved = tuple(Path(p) for p in paths)
+    files = _discover_files(resolved, glob)
+
+    if not files:
+        return 0
+
+    file_chunks: dict[str, list[tuple[str, str]]] = {}
+    for f in files:
+        text = f.read_text(errors="replace")
+        display_path = str(f)
+        chunks = _chunk_lines(text, display_path, chunk_size, overlap)
+        if chunks:
+            file_chunks[display_path] = chunks
+
+    total_chunks = sum(len(cs) for cs in file_chunks.values())
+    if total_chunks == 0:
+        return 0
+
+    db = sqlite_utils.Database(llm.user_dir() / "embeddings.db")
+    if llm.Collection.exists(db, collection):
+        col = llm.Collection(collection, db)
+    else:
+        col = llm.Collection(collection, db=db, model_id=model_id)
+
+    def _gen() -> Iterator[tuple[str, str]]:
+        for name, chunks in file_chunks.items():
+            for cid, text in chunks:
+                yield cid, text
+
+    col.embed_multi(_gen(), store=True)
+    return total_chunks
+
+
+def analyze_code(
+    analysis_type: str = "review",
+    files: list[str] | None = None,
+    model_id: str | None = None,
+    loc_name: str = DEFAULT_LOCATION,
+) -> str:
+    """Analyze code files with a review or overview template.
+
+    ``analysis_type`` must be one of ``"review"`` or ``"overview"``.
+
+    When ``files`` is ``None`` the current working directory is
+    scanned automatically via :func:`collect_code_files`.
+
+    If ``model_id`` is ``None`` the default FCIO chat model is used.
+
+    Returns the generated analysis text.
+    """
+    if files:
+        resolved = [Path(f).resolve() for f in files]
+    else:
+        resolved = collect_code_files(Path.cwd())
+
+    if not resolved:
+        return ""
+
+    fragments = [llm.Fragment(content=f.read_text(), source=str(f)) for f in resolved]
+
+    if model_id is None:
+        model_id = f"fcio-{loc_name}/gpt-oss-20b-20b"
+    m = llm.get_model(model_id)
+
+    response = m.prompt(fragments=fragments, system=TEMPLATES[analysis_type])
+    return response.text()
+
+
 # ── CLI Commands ────────────────────────────────────────
 
 
@@ -883,22 +1160,9 @@ def fcio(ctx: click.Context, loc_name: str, verbose: bool, debug: bool) -> None:
 @click.pass_context
 def refresh(ctx: click.Context) -> None:
     """Fetch available models from API and cache locally"""
-    loc: Location = ctx.obj["location"]
-    key = get_api_key(loc)
-    resp = api_request("GET", "/models", key, loc.api_base)
-    raw = resp.json()
-    data = raw.get("data", raw if isinstance(raw, list) else [])
-    models = []
-    for m in data:
-        mid = m["id"] if isinstance(m, dict) else str(m)
-        models.append(
-            {
-                "id": mid,
-                "safe_id": mid.replace(":", "-").replace(".", "_"),
-            },
-        )
-    _cache_path(loc.name).write_text(json.dumps(models, indent=2))
-    click.echo(f"Cached {len(models)} models for {loc.name}", err=True)
+    loc_name: str = ctx.obj["location"].name
+    models = refresh_models(loc_name)
+    click.echo(f"Cached {len(models)} models for {loc_name}", err=True)
 
     # ── models ─────────────────────────────────────────────
 
@@ -910,19 +1174,13 @@ def refresh(ctx: click.Context) -> None:
 @click.pass_context
 def cmd_models(ctx: click.Context, model_id: str | None, as_json: bool, filt: str | None) -> None:
     """List available models, or show details for MODEL_ID"""
-    loc: Location = ctx.obj["location"]
-    key = get_api_key(loc)
+    loc_name: str = ctx.obj["location"].name
 
     if model_id:
-        # Single model detail view
         try:
-            resp = api_request("GET", f"/models/{model_id}", key, loc.api_base)
-        except ApiError as e:
-            if e.status_code == 404:
-                raise click.ClickException(f"Model not found: {model_id}") from e
-            raise
-        data = resp.json().get("data", resp.json())
-
+            data = get_model_info(model_id, loc_name)
+        except ModelError as e:
+            raise click.ClickException(str(e)) from e
         if as_json:
             click.echo(json.dumps(data, indent=2))
         else:
@@ -934,13 +1192,7 @@ def cmd_models(ctx: click.Context, model_id: str | None, as_json: bool, filt: st
             click.echo("Type:   chat")
         return
 
-    # List all models
-    resp = api_request("GET", "/models", key, loc.api_base)
-    models = resp.json().get("data", [])
-
-    if filt:
-        models = [m for m in models if filt.lower() in m.get("id", "").lower()]
-
+    models = list_models(loc_name, filt)
     if as_json:
         click.echo(json.dumps(models, indent=2))
     else:
@@ -1069,115 +1321,22 @@ def cmd_embed(
 @click.pass_context
 def cmd_capabilities(ctx: click.Context, as_json: bool) -> None:
     """Show endpoint capabilities and available models"""
-    loc: Location = ctx.obj["location"]
-    key = get_api_key(loc)
+    loc_name: str = ctx.obj["location"].name
+    result = get_capabilities(loc_name)
 
-    # ── Section 1: Endpoint ──
-    auth_status = "✅ valid"
-    models_data: list[dict] = []
-    try:
-        resp = api_request("GET", "/models", key, loc.api_base)
-        models_data = resp.json().get("data", [])
-    except ApiError as e:
-        auth_status = f"❌ {e}"
-
-    # ── Section 2: Models ──
-    embed_keywords = ("embed", "bge", "gemma")
-    chat_keywords = ("gpt", "llama", "qwen", "mistral", "chat", "claude", "deepseek")
-    chat_models: list[dict] = []
-    embed_models: list[dict] = []
-    other_models: list[dict] = []
-    for m in models_data:
-        mid = m["id"]
-        if any(k in mid.lower() for k in embed_keywords):
-            embed_models.append(m)
-        elif any(k in mid.lower() for k in chat_keywords):
-            chat_models.append(m)
-        else:
-            other_models.append(m)
-
-    # ── Section 3: Feature probes ──
-    def _probe_endpoint(
-        method: str,
-        path: str,
-        body: dict | None = None,
-        model_error_marker: str = "model",
-    ) -> str:
-        try:
-            api_request(method, path, key, loc.api_base, json_data=body)
-            return "✅ available"
-        except ApiError as e:
-            if e.status_code and model_error_marker in str(e).lower():
-                return "✅ available"
-            if e.status_code == httpx.codes.UNAUTHORIZED:
-                return "❌ auth failed"
-            return f"❌ {e}"
-
-    chat_status = _probe_endpoint(
-        "POST",
-        "/chat/completions",
-        body={"model": "_probe_test", "messages": [{"role": "user", "content": "."}]},
-    )
-    streaming_status = _probe_endpoint(
-        "POST",
-        "/chat/completions",
-        body={
-            "model": "_probe_test",
-            "messages": [{"role": "user", "content": "."}],
-            "stream": True,
-        },
-    )
-    embed_status = _probe_endpoint(
-        "POST",
-        "/embeddings",
-        body={"model": "_probe_test", "input": "test"},
-    )
-
-    # ── Output ──
     if as_json:
-        payload = {
-            "endpoint": {
-                "name": loc.name,
-                "api_base": loc.api_base,
-                "auth": auth_status,
-            },
-            "models": {
-                "chat": chat_models,
-                "embedding": embed_models,
-                "other": other_models,
-                "counts": {
-                    "chat": len(chat_models),
-                    "embedding": len(embed_models),
-                    "other": len(other_models),
-                    "total": len(models_data),
-                },
-            },
-            "features": {
-                "chat_completions": {
-                    "status": chat_status,
-                    "method": "POST",
-                    "path": "/chat/completions",
-                },
-                "streaming": {
-                    "status": streaming_status,
-                    "method": "POST",
-                    "path": "/chat/completions",
-                    "param": "stream",
-                },
-                "embeddings": {"status": embed_status, "method": "POST", "path": "/embeddings"},
-            },
-        }
-        click.echo(json.dumps(payload, indent=2))
+        click.echo(json.dumps(result, indent=2))
         return
 
-    # Human-readable output
-    click.echo(f"🔍 FCIO {loc.name.upper()} Capabilities")
+    ep = result["endpoint"]
+    click.echo(f"🔍 FCIO {ep['name'].upper()} Capabilities")
     click.echo("=" * 50)
     click.echo()
     click.echo("Endpoint:")
-    click.echo(f"  Name:        {loc.name}")
-    click.echo(f"  API Base:    {loc.api_base}")
-    click.echo(f"  Auth:        {auth_status}")
+    click.echo(f"  Name:        {ep['name']}")
+    click.echo(f"  API Base:    {ep['api_base']}")
+    auth_icon = "✅" if ep["auth"] == "valid" else "❌"
+    click.echo(f"  Auth:        {auth_icon} {ep['auth']}")
     click.echo()
 
     def _print_models(label: str, models: list[dict]) -> None:
@@ -1194,14 +1353,22 @@ def cmd_capabilities(ctx: click.Context, as_json: bool) -> None:
             click.echo(f"  - {m['id']}{meta}")
         click.echo()
 
-    _print_models("Chat Models", chat_models)
-    _print_models("Embedding Models", embed_models)
-    _print_models("Other Models", other_models)
+    _print_models("Chat Models", result["models"]["chat"])
+    _print_models("Embedding Models", result["models"]["embedding"])
+    _print_models("Other Models", result["models"]["other"])
 
+    def _status_icon(s: str) -> str:
+        if s == "available":
+            return "✅ available"
+        if s == "auth failed":
+            return "❌ auth failed"
+        return f"❌ {s}"
+
+    feats = result["features"]
     click.echo("Features:")
-    click.echo(f"  Chat completions:  {chat_status} (POST /chat/completions)")
-    click.echo(f"  Streaming:         {streaming_status} (POST /chat/completions, stream)")
-    click.echo(f"  Embeddings:        {embed_status} (POST /embeddings)")
+    click.echo(f"  Chat completions:  {_status_icon(feats['chat_completions']['status'])} (POST /chat/completions)")
+    click.echo(f"  Streaming:         {_status_icon(feats['streaming']['status'])} (POST /chat/completions, stream)")
+    click.echo(f"  Embeddings:        {_status_icon(feats['embeddings']['status'])} (POST /embeddings)")
 
     # ── simulate ────────────────────────────────────────────
 
@@ -1320,29 +1487,14 @@ def cmd_simulate(speed: str, seed: int, raw: bool) -> None:
 @click.pass_context
 def cmd_tokens(ctx: click.Context, text: tuple[str], model_id: str, as_json: bool) -> None:
     """Estimate token count for text (if endpoint supports it)"""
-    loc: Location = ctx.obj["location"]
-    key = get_api_key(loc)
+    loc_name: str = ctx.obj["location"].name
+    result = estimate_tokens(" ".join(text), model_id, loc_name)
 
-    body = {
-        "model": model_id,
-        "messages": [{"role": "user", "content": " ".join(text)}],
-        "max_tokens": 1,
-    }
-
-    try:
-        resp = api_request("POST", "/chat/completions", key, loc.api_base, json_data=body)
-        data = resp.json()
-        usage = data.get("usage", {})
-
-        if as_json:
-            click.echo(json.dumps(usage, indent=2))
-        else:
-            click.echo(f"Model: {model_id}")
-            click.echo(f"Tokens: {usage.get('prompt_tokens', '?')}")
-    except ApiError as e:
-        click.echo(f"⚠️  Token endpoint not supported: {e}", err=True)
-        total_chars = sum(len(t) for t in text)
-        click.echo(f"Rough estimate: ~{total_chars // 4} tokens (heuristic)")
+    if as_json:
+        click.echo(json.dumps(result, indent=2))
+    else:
+        click.echo(f"Model: {model_id}")
+        click.echo(f"Tokens: {result.get('prompt_tokens', '?')}")
 
     # ── ingest ─────────────────────────────────────────────
 
@@ -1404,67 +1556,31 @@ def cmd_ingest(
       llm fcio ingest mydocs file1.md file2.md
       llm fcio ingest mydocs ./src/ -m bge --chunk-size 50 --overlap 10
     """
-    resolved_paths = tuple(Path(p) for p in paths)
-    files = _discover_files(resolved_paths, glob_pattern)
-
-    if not files:
-        raise click.ClickException("No files found matching criteria")
-
-    # Build chunk map: {filepath: [(chunk_id, chunk_text), ...]}
-    file_chunks: dict[str, list[tuple[str, str]]] = {}
-    for f in files:
-        text = f.read_text(errors="replace")
-        display_path = str(f)
-        chunks = _chunk_lines(text, display_path, chunk_size, overlap)
-        if chunks:
-            file_chunks[display_path] = chunks
-
-    total_chunks = sum(len(cs) for cs in file_chunks.values())
+    loc_name: str = ctx.obj["location"].name
 
     if not skip_confirm:
-        click.echo("Files to ingest:")
-        max_name_len = max(len(n) for n in file_chunks)
-        for name, chunks in file_chunks.items():
-            padded = name.ljust(max_name_len)
-            click.echo(f"  {padded}  {len(chunks)} chunks")
-        click.echo(f"Total: {len(file_chunks)} files, {total_chunks} chunks")
-        click.echo()
+        resolved_paths = tuple(Path(p) for p in paths)
+        files = _discover_files(resolved_paths, glob_pattern)
+        if not files:
+            raise click.ClickException("No files found matching criteria")
+        total_chunks = sum(
+            len(_chunk_lines(f.read_text(errors="replace"), str(f), chunk_size, overlap))
+            for f in files
+        )
+        click.echo(f"Files: {len(files)}, Chunks: {total_chunks}")
         if not click.confirm("Continue", default=False):
             raise click.ClickException("Aborted")
 
-    # Create collection and embed
-    db = sqlite_utils.Database(llm.user_dir() / "embeddings.db")
-    if llm.Collection.exists(db, collection):
-        col = llm.Collection(collection, db)
-    else:
-        col = llm.Collection(collection, db=db, model_id=model_id)
-    click.echo(f"Using model: {col.model().model_id}", err=True)
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("{task.fields[filename]}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        TimeRemainingColumn(),
-    ) as progress:
-        task = progress.add_task(
-            "ingest",
-            total=total_chunks,
-            filename="Starting...",
-        )
-
-        def _tracked() -> Iterator[tuple[str, str]]:
-            for name, chunks in file_chunks.items():
-                fname = Path(name).name
-                for cid, text in chunks:
-                    progress.update(task, filename=fname)
-                    yield cid, text
-                    progress.advance(task)
-
-        col.embed_multi(_tracked(), store=True)
-
-    click.echo(f"Ingested {total_chunks} chunks into '{collection}'", err=True)
+    total = ingest_files(
+        collection,
+        list(paths),
+        glob=glob_pattern,
+        model_id=model_id,
+        chunk_size=chunk_size,
+        overlap=overlap,
+        loc_name=loc_name,
+    )
+    click.echo(f"Ingested {total} chunks into '{collection}'", err=True)
 
 
 # ── analyze ──────────────────────────────────────────────
@@ -1501,37 +1617,10 @@ def cmd_analyze(
       llm fcio analyze review src/  # Review specific files/paths
       llm fcio analyze --model 120b # Use specific model
     """
-    resolved_files = [Path(f).resolve() for f in files] if files else collect_code_files(Path.cwd())
-
-    if not resolved_files:
-        click.echo(f"No code files found in {Path.cwd()}")
-        click.echo("Specify files explicitly or check file extensions")
-        ctx.exit(1)
-        return
-
-    # Display file list with sizes and token estimate (chars/4)
-    total_chars = 0
-    for f in resolved_files:
-        content = f.read_text()
-        chars = len(content)
-        total_chars += chars
-        tokens = chars // 4
-        size = f.stat().st_size
-        click.echo(f"  {f.name}  ({size}b, ~{tokens} tokens)")
-    total_tokens = total_chars // 4
-    click.echo(f"Total: ~{total_tokens} tokens from {len(resolved_files)} files")
-    click.echo()
-
-    # Build fragments from collected files
-    fragments = [llm.Fragment(content=f.read_text(), source=str(f)) for f in resolved_files]
-
-    # Get model (default if --model not specified)
-    m = llm.get_model(model)
-
-    # Prompt with template system and fragments
-    response = m.prompt(fragments=fragments, system=TEMPLATES[analysis_type])  # ty: ignore[invalid-argument-type]
-    for _chunk in response:
-        pass  # Trigger streaming (renderer handles display if TTY)
+    loc_name: str = ctx.obj["location"].name
+    file_list = list(files) if files else None
+    text = analyze_code(analysis_type, file_list, model, loc_name)
+    click.echo(text)
 
 
 @llm.hookimpl
