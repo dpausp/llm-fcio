@@ -1,6 +1,6 @@
 [project]
 name = "llm-fcio"
-version = "2026.5.26a1"
+version = "2026.5.26a2"
 requires-python = ">=3.14"
 dependencies = ["llm>=0.31", "httpx>=0.28.1", "httpx-sse>=0.4.3", "pathspec>=1.1.1", "sqlite-utils>=3.39", "rich>=15.0.0", "pygments>=2.20.0", "pydantic>=2.13.3"]
 
