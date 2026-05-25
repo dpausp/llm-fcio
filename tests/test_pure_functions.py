@@ -1,14 +1,22 @@
 """Tests for pure functions in llm_fcio.
 
-Covers _chunk_lines, _discover_files, and _build_chat_body with edge cases.
+Covers _chunk_lines, _discover_files, _build_chat_body, and
+model registration with edge cases.
 """
 
 from pathlib import Path
+from unittest.mock import patch
 
 import click
 import pytest
 
-from llm_fcio import _build_chat_body, _chunk_lines, _discover_files
+from llm_fcio import (
+    _build_chat_body,
+    _chunk_lines,
+    _discover_files,
+    register_embedding_models,
+    register_models,
+)
 
 # ── _chunk_lines ────────────────────────────────────────────────
 
@@ -315,3 +323,123 @@ def test_build_chat_body_max_tokens_zero_is_truthy() -> None:
     # _build_chat_body uses `if max_tokens:` which is falsy for 0
     body = _build_chat_body("m", [], 0.5, 0)
     assert "max_tokens" not in body
+
+
+# ── Model Registration ────────────────────────────────────────────
+
+
+def _count_captured(
+    captured: list,
+    loc_name: str,
+    id_substring: str,
+) -> int:
+    """Count registrations matching location and model id substring."""
+    count = 0
+    for model, kwargs in captured:
+        mid: str = model.model_id
+        if f"fcio-{loc_name}/" in mid and id_substring in mid:
+            count += 1
+    return count
+
+
+def _assert_register_called_once(
+    captured: list,
+    loc_name: str,
+    expected_id: str,
+    expected_aliases: list[str],
+) -> None:
+    """Assert exactly one registration for (location, model) with aliases."""
+    matches = [
+        (model, kwargs)
+        for model, kwargs in captured
+        if model.model_id == f"fcio-{loc_name}/{expected_id}"
+    ]
+    assert len(matches) == 1, (
+        f"Expected 1 registration for fcio-{loc_name}/{expected_id}, "
+        f"got {len(matches)}"
+    )
+    _model, kwargs = matches[0]
+    assert kwargs.get("aliases") == expected_aliases, (
+        f"Expected aliases {expected_aliases}, got {kwargs.get('aliases')}"
+    )
+
+
+_INJECTED_ALIASES: dict[str, list[str]] = {
+    "fcio-rzob/gpt-oss-20b": ["gpt-oss-20b", "20b"],
+    "fcio-rzob/gpt-oss-120b": ["gpt-oss-120b", "120b"],
+    "fcio-rzob/bge-m3-567m": ["bge-m3-567m", "bge"],
+    "fcio-rzob/nomic-embed-text-v1_5": ["nomic-embed-text-v1_5", "nomic"],
+    "fcio-rzob/embeddinggemma-300m": ["embeddinggemma-300m", "gemma"],
+}
+
+
+def _register_spy(captured: list) -> object:
+    """Factory: create a register callback that appends (model, kwargs) tuples."""
+    def _register(model: object, **kwargs: object) -> None:
+        captured.append((model, kwargs))
+    return _register
+
+
+@patch("llm_fcio._load_models", return_value=[])
+def test_register_models_no_cache_uses_hard_coded_chat(
+    _mock_load: object,
+) -> None:
+    """register_models registriert Chat-Models aus _HARD_CODED_MODELS."""
+    captured: list = []
+    register_models(_register_spy(captured))
+
+    # 3 locations × 2 chat models = 6 registrations
+    assert len(captured) == 6, f"Expected 6 total, got {len(captured)}"
+
+    # Verify structure: all entries are (model, kwargs)
+    for model, kwargs in captured:
+        assert hasattr(model, "model_id")
+        assert isinstance(kwargs, dict)
+        assert "aliases" in kwargs
+
+    # Verify rzob has correct models + aliases
+    for mid, expected_aliases in _INJECTED_ALIASES.items():
+        if "/gpt-oss-" in mid:
+            _assert_register_called_once(captured, "rzob", mid.split("/")[1], expected_aliases)
+
+    # Verify dev and whq also got chat models
+    for loc in ("dev", "whq"):
+        assert _count_captured(captured, loc, "gpt-oss-20b") == 1
+        assert _count_captured(captured, loc, "gpt-oss-120b") == 1
+
+
+@patch("llm_fcio._load_models", return_value=[])
+def test_register_embedding_models_no_cache_uses_hard_coded(
+    _mock_load: object,
+) -> None:
+    """register_embedding_models registriert Embedding-Models aus _HARD_CODED."""
+    captured: list = []
+    register_embedding_models(_register_spy(captured))
+
+    # 3 locations × 3 embedding models = 9 registrations
+    assert len(captured) == 9, f"Expected 9 total, got {len(captured)}"
+
+    # Verify rzob has correct models + aliases
+    for mid, expected_aliases in _INJECTED_ALIASES.items():
+        if "/bge-" in mid or "/nomic-" in mid or "/embeddinggemma-" in mid:
+            _assert_register_called_once(captured, "rzob", mid.split("/")[1], expected_aliases)
+
+    # Verify dev and whq
+    for loc in ("dev", "whq"):
+        for model_id_part in ("bge-m3-567m", "nomic-embed-text-v1_5", "embeddinggemma-300m"):
+            assert _count_captured(captured, loc, model_id_part) == 1
+
+
+@patch("llm_fcio._load_models", return_value=[])
+def test_register_models_without_network(
+    _mock_load: object,
+) -> None:
+    """Kein API-Call, kein Cache-File — Models kommen aus Hard-Code."""
+    captured: list = []
+    register_models(_register_spy(captured))
+    # Nur Struktur prüfen — kein Netzwerk wurde angerührt
+    ids = {m.model_id for m, _k in captured}
+    assert "fcio-rzob/gpt-oss-20b" in ids
+    assert "fcio-rzob/gpt-oss-120b" in ids
+    assert "fcio-dev/gpt-oss-20b" in ids
+    assert "fcio-whq/gpt-oss-120b" in ids
