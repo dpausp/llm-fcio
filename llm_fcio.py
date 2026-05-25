@@ -294,7 +294,17 @@ def _iter_sse_content(
                 continue
 
 
-# ── Model Cache ─────────────────────────────────────────
+# ── Hard-coded Models ──────────────────────────────────
+
+# Bekannte Modelle. Ändern sich selten — bei neuen Versionen reicht
+# `llm fcio refresh` um den API-Cache zu updaten.
+_HARD_CODED_MODELS: list[dict] = [
+    {"id": "gpt-oss:20b", "safe_id": "gpt-oss-20b"},
+    {"id": "gpt-oss:120b", "safe_id": "gpt-oss-120b"},
+    {"id": "bge-m3:567m", "safe_id": "bge-m3-567m"},
+    {"id": "Nomic-embed-text:v1.5", "safe_id": "nomic-embed-text-v1_5"},
+    {"id": "embeddinggemma:300m", "safe_id": "embeddinggemma-300m"},
+]
 
 
 def _cache_path(loc_name: str = DEFAULT_LOCATION) -> Path:
@@ -648,11 +658,12 @@ _SHORT_EMBED_ALIASES = {
 def register_models(register: Callable) -> None:
     chat_keywords = ("gpt", "llama", "qwen", "mistral", "chat", "claude", "deepseek")
     for loc_name, loc in LOCATIONS.items():
-        for m in _load_models(loc_name):
+        models = _HARD_CODED_MODELS if loc_name == DEFAULT_LOCATION else _load_models(loc_name)
+        for m in models:
             mid = m["id"]
             if not any(k in mid.lower() for k in chat_keywords):
                 continue
-            safe = m.get("safe_id", mid.replace(":", "-"))
+            safe = m["safe_id"]
             short = _SHORT_CHAT_ALIASES.get(mid) if loc_name == "rzob" else None
             aliases = [safe] + ([short] if short else [])
             register(
@@ -665,11 +676,12 @@ def register_models(register: Callable) -> None:
 def register_embedding_models(register: Callable) -> None:
     embed_keywords = ("embed", "bge", "gemma")
     for loc_name, loc in LOCATIONS.items():
-        for m in _load_models(loc_name):
+        models = _HARD_CODED_MODELS if loc_name == DEFAULT_LOCATION else _load_models(loc_name)
+        for m in models:
             mid = m["id"]
             if not any(k in mid.lower() for k in embed_keywords):
                 continue
-            safe = m.get("safe_id", mid.replace(":", "-"))
+            safe = m["safe_id"]
             short = _SHORT_EMBED_ALIASES.get(mid) if loc_name == "rzob" else None
             aliases = [safe] + ([short] if short else [])
             register(
