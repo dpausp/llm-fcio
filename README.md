@@ -32,6 +32,25 @@ Select a location with `-l`/`--location` (default: `rzob`). Model IDs include th
 llm fcio -l dev refresh           # refresh models for dev location
 ```
 
+## Structured output
+
+Models that support `response_format` (llama-server, vllm) accept JSON schema
+for structured/typed responses via `llm prompt --schema`:
+
+```bash
+llm prompt --schema 'answer str' --no-stream -m fcio-dev/gpt-oss-20b "What is 2+2?"
+# {"answer": "4"}
+```
+
+Check if a location's API accepts `response_format` with:
+
+```bash
+llm fcio capabilities     # look for "Schema output"
+```
+
+Per-model support depends on the inference backend — not all backends
+implement `response_format`. Unsupported backends return an API error.
+
 ## When not to use this
 
 - You need image or audio generation — the API serves text and embeddings only.
