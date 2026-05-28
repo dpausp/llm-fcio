@@ -21,8 +21,9 @@ def pyproject_toml(project_root: Path) -> dict:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Register the 'live' marker for optional live API tests."""
+    """Register custom markers."""
     config.addinivalue_line("markers", "live: requires --run-live (real API call)")
+    config.addinivalue_line("markers", "e2e: end-to-end tests against real HTTP servers (skvaider or dummy)")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
