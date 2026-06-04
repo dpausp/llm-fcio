@@ -669,7 +669,8 @@ def install_renderer_patch() -> None:
                     renderer.feed(chunk)
                 except Exception:  # noqa: BLE001 — renderer-safety: graceful degradation
                     use_renderer = False
-            yield chunk
+            if not use_renderer:
+                yield chunk
         if use_renderer:
             with contextlib.suppress(Exception):  # noqa: BLE001 — renderer-safety
                 renderer.flush()

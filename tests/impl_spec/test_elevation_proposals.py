@@ -72,12 +72,12 @@ def test_install_renderer_patch_idempotent() -> None:
         llm.Response.__iter__ = original_iter
 
 
-def test_patched_iter_yields_chunks_and_calls_renderer() -> None:
-    """Q3 contract: _patched_iter yields chunks and feeds the renderer.
+def test_patched_iter_suppresses_yields_when_renderer_active() -> None:
+    """Q3 contract: _patched_iter suppresses yields when renderer is active.
 
     Installs the patch with TTY=True, creates a mock llm.Response whose
     original __iter__ yields chunks. Iterating the patched __iter__ must
-    yield those same chunks and call renderer.feed() on each.
+    NOT yield chunks (renderer handles output instead) and call renderer.feed().
     """
     import llm
 
@@ -102,7 +102,8 @@ def test_patched_iter_yields_chunks_and_calls_renderer() -> None:
             mock_response = MagicMock(spec=llm.Response)
             collected = list(llm.Response.__iter__(mock_response))
 
-            assert collected == chunks
+            # Renderer handles output — chunks must NOT be yielded
+            assert collected == []
             assert mock_feed.call_count >= 1
     finally:
         llm.Response.__iter__ = original_iter

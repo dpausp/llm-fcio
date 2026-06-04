@@ -13,9 +13,10 @@ Marked with @pytest.mark.e2e — run with: pytest -m e2e
 """
 
 import json
+import sys
 import threading
 import time
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -24,6 +25,7 @@ import llm
 import pytest
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 
 from llm_fcio import LOCATIONS, Location
 
@@ -58,10 +60,40 @@ def create_app() -> FastAPI:
                 return {"data": m}
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
 
+    async def _sse_chunks(content: str, model_id: str) -> AsyncGenerator[str, None]:
+        """Yield SSE events for streaming chat completion."""
+        chunk_size = 8
+        for i in range(0, max(1, len(content)), chunk_size):
+            text_chunk = content[i : i + chunk_size]
+            event = {
+                "id": "chatcmpl-e2e-stream",
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": model_id,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": text_chunk},
+                        "finish_reason": None,
+                    }
+                ],
+            }
+            yield f"data: {json.dumps(event)}\n\n"
+
+        final = {
+            "id": "chatcmpl-e2e-stream",
+            "object": "chat.completion.chunk",
+            "model": model_id,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
+        yield f"data: {json.dumps(final)}\n\n"
+        yield "data: [DONE]\n\n"
+
     @app.post("/v1/chat/completions")
     async def chat_completions(body: dict):
         """Return realistic OpenAI chat completion response.
 
+        Supports both streaming (SSE) and non-streaming modes.
         Probe requests (model contains '_probe_test') return 400 with
         'model not found' — matching what get_capabilities expects.
         """
@@ -78,18 +110,26 @@ def create_app() -> FastAPI:
                 content += c
 
         prompt_tokens = max(1, len(content) // 4)
+        response_content = f"Echo: {content[:200]}"
+        model_id = body.get("model", "unknown")
+
+        if body.get("stream"):
+            return StreamingResponse(
+                _sse_chunks(response_content, model_id),
+                media_type="text/event-stream",
+            )
 
         return {
             "id": "chatcmpl-e2e-123",
             "object": "chat.completion",
             "created": int(time.time()),
-            "model": body.get("model", "unknown"),
+            "model": model_id,
             "choices": [
                 {
                     "index": 0,
                     "message": {
                         "role": "assistant",
-                        "content": f"Echo: {content[:200]}",
+                        "content": response_content,
                     },
                     "finish_reason": "stop",
                 }
@@ -326,7 +366,9 @@ class TestE2E:
         assert cached[0]["id"] == "gpt-oss:20b"
 
     @pytest.mark.e2e
-    def test_get_cached_models_empty(self, patch_location: Location, patch_api_key: None, user_dir: Path) -> None:
+    def test_get_cached_models_empty(
+        self, patch_location: Location, patch_api_key: None, user_dir: Path
+    ) -> None:
         """get_cached_models() returns empty list when cache doesn't exist."""
         from llm_fcio import get_cached_models
 
@@ -553,3 +595,151 @@ class TestE2E:
         data = resp.json()
         assert len(data["data"]) == 1
         assert len(data["data"][0]["embedding"]) == 384
+
+    @pytest.mark.e2e
+    def test_dummy_server_chat_streaming_endpoint(self, test_api_base: str) -> None:
+        """Verify the dummy server's SSE streaming endpoint works."""
+        resp = httpx.post(
+            f"{test_api_base}/chat/completions",
+            json={
+                "model": "gpt-oss:20b",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "stream": True,
+            },
+            timeout=5,
+        )
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers.get("content-type", "")
+        # Collect SSE events
+        chunks = []
+        for line in resp.text.split("\n"):
+            if line.startswith("data: ") and line != "data: [DONE]":
+                event = json.loads(line[6:])
+                delta = event.get("choices", [{}])[0].get("delta", {})
+                if delta.get("content"):
+                    chunks.append(delta["content"])
+        full = "".join(chunks)
+        assert full.startswith("Echo:")
+
+
+# ── Streaming Renderer E2E Tests ──────────────────────────────
+
+
+class TestStreamingRendererE2E:
+    """E2E tests for install_renderer_patch streaming output.
+
+    Verifies that the patched llm.Response.__iter__ produces
+    exactly one copy of output on stdout (via Rich renderer),
+    not two (renderer + raw yield).
+
+    Uses the session-scoped dummy server with SSE streaming support.
+    """
+
+    @pytest.fixture()
+    def with_renderer(self, monkeypatch):
+        """Install the streaming renderer patch for testing."""
+        import llm
+        import llm_fcio
+
+        saved = llm.Response.__iter__
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        llm_fcio.install_renderer_patch()
+        yield
+        llm.Response.__iter__ = saved
+
+    @pytest.fixture()
+    def env_key(self, monkeypatch):
+        """Set API key via environment variable for KeyModel.get_key()."""
+        monkeypatch.setenv("FCIO_RZOB_API_KEY", TEST_KEY)
+
+    @pytest.mark.e2e
+    def test_streaming_single_output(
+        self, patch_location, env_key, user_dir, with_renderer, capsys
+    ) -> None:
+        """Streaming through patched __iter__ outputs text exactly once.
+
+        Simulates llm CLI behavior: iterate response and print each chunk.
+        The patched __iter__ must suppress yields when the renderer is active,
+        otherwise stdout gets both rendered output AND raw text (double output).
+        """
+        from llm_fcio import LOCATIONS, RzobModel
+
+        loc = LOCATIONS["rzob"]
+        model = RzobModel("fcio-rzob/test-stream", "gpt-oss:20b", loc)
+        response = model.prompt("Hello E2E", stream=True)
+
+        # Simulate llm CLI: iterate and print each yielded chunk
+        for chunk in response:
+            sys.stdout.write(chunk)
+        sys.stdout.flush()
+
+        captured = capsys.readouterr()
+
+        # "Echo" must appear exactly ONCE — not twice (double output bug)
+        echo_count = captured.out.count("Echo")
+        assert echo_count == 1, (
+            f"Expected 'Echo' exactly once, got {echo_count} times:\n{captured.out}"
+        )
+
+    @pytest.mark.e2e
+    def test_non_streaming_single_output(
+        self, patch_location, env_key, user_dir, with_renderer, capsys
+    ) -> None:
+        """Non-streaming response through patched __iter__ outputs text exactly once."""
+        from llm_fcio import LOCATIONS, RzobModel
+
+        loc = LOCATIONS["rzob"]
+        model = RzobModel("fcio-rzob/test-nostream", "gpt-oss:20b", loc)
+        response = model.prompt("Test non-streaming", stream=False)
+
+        # Simulate llm CLI: iterate and print each yielded chunk
+        for chunk in response:
+            sys.stdout.write(chunk)
+        sys.stdout.flush()
+
+        captured = capsys.readouterr()
+
+        echo_count = captured.out.count("Echo")
+        assert echo_count == 1, (
+            f"Expected 'Echo' exactly once, got {echo_count} times:\n{captured.out}"
+        )
+
+    @pytest.mark.e2e
+    def test_renderer_fallback_yields_chunks(
+        self, patch_location, env_key, user_dir, monkeypatch, capsys
+    ) -> None:
+        """When renderer.feed() fails, chunks are yielded as fallback."""
+        import llm
+        import llm_fcio
+        from llm_fcio import LOCATIONS, RzobModel
+
+        saved = llm.Response.__iter__
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        monkeypatch.setattr(
+            llm_fcio._StreamingRenderer,
+            "feed",
+            lambda self, chunk: (_ for _ in ()).throw(RuntimeError("test fail")),
+        )
+        llm_fcio.install_renderer_patch()
+
+        try:
+            loc = LOCATIONS["rzob"]
+            model = RzobModel("fcio-rzob/test-fallback", "gpt-oss:20b", loc)
+            response = model.prompt("Fallback test", stream=True)
+
+            collected = []
+            for chunk in response:
+                collected.append(chunk)
+                sys.stdout.write(chunk)
+            sys.stdout.flush()
+
+            captured = capsys.readouterr()
+
+            # Fallback: chunks should be yielded (not suppressed by renderer)
+            assert len(collected) > 0, "Fallback must yield chunks"
+            full_text = "".join(collected)
+            assert "Echo" in full_text
+            # Raw text appears once via sys.stdout.write
+            assert captured.out.count("Echo") == 1
+        finally:
+            llm.Response.__iter__ = saved
