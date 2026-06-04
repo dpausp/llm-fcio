@@ -1,7 +1,7 @@
 """CLI tests for llm_fcio commands using Click's CliRunner.
 
-Covers all 8 fcio subcommands: refresh, models, chat, embed,
-capabilities, simulate, tokens, ingest.
+Covers all fcio subcommands: refresh, models, chat, embed,
+capabilities, simulate, tokens, ingest, analyze.
 HTTP-boundary mocking via respx; only non-HTTP code runs unmocked.
 """
 
@@ -16,7 +16,7 @@ import pytest
 import respx
 from click.testing import CliRunner
 
-from llm_fcio import register_commands
+from llm_fcio import _SSEMetadata, register_commands
 
 API_BASE = "https://ai.rzob.fcio.net/openai/v1"
 MODELS_URL = f"{API_BASE}/models"
@@ -341,7 +341,9 @@ def test_chat_streaming_output(runner: CliRunner, cli: click.Group) -> None:
     with (
         patch("llm_fcio.get_api_key", return_value="test-key"),
         patch("llm_fcio._resolve_model", return_value="gpt-oss:20b"),
-        patch("llm_fcio._iter_sse_content", return_value=iter(["Hello", " world"])),
+        patch(
+            "llm_fcio._iter_sse_content", return_value=(_SSEMetadata(), iter(["Hello", " world"]))
+        ),
     ):
         result = runner.invoke(cli, ["fcio", "chat", "--no-markdown", "Say hello"])
     assert result.exit_code == 0
@@ -962,7 +964,10 @@ def test_chat_streaming_with_renderer(runner: CliRunner, cli: click.Group) -> No
     with (
         patch("llm_fcio.get_api_key", return_value="test-key"),
         patch("llm_fcio._resolve_model", return_value="gpt-oss:20b"),
-        patch("llm_fcio._iter_sse_content", return_value=iter(["Hello", " **world**"])),
+        patch(
+            "llm_fcio._iter_sse_content",
+            return_value=(_SSEMetadata(), iter(["Hello", " **world**"])),
+        ),
     ):
         result = runner.invoke(cli, ["fcio", "chat", "Say hello"])
     assert result.exit_code == 0
@@ -1289,7 +1294,10 @@ def test_chat_streaming_with_markdown_render(runner: CliRunner, cli: click.Group
     with (
         patch("llm_fcio.get_api_key", return_value="test-key"),
         patch("llm_fcio._resolve_model", return_value="gpt-oss:20b"),
-        patch("llm_fcio._iter_sse_content", return_value=iter(["Hello", " **world**"])),
+        patch(
+            "llm_fcio._iter_sse_content",
+            return_value=(_SSEMetadata(), iter(["Hello", " **world**"])),
+        ),
     ):
         result = runner.invoke(cli, ["fcio", "chat", "--markdown", "Say hello"])
     assert result.exit_code == 0
@@ -1416,3 +1424,31 @@ def test_chat_with_max_tokens(runner: CliRunner, cli: click.Group) -> None:
         )
     assert result.exit_code == 0
     assert "Limited reply" in result.output
+
+
+# ── analyze ──────────────────────────────────────────────
+
+
+def test_analyze_help(runner: CliRunner, cli: click.Group) -> None:
+    """--help shows usage text."""
+    result = runner.invoke(cli, ["fcio", "analyze", "--help"])
+    assert result.exit_code == 0
+    assert "Analyze code files with review or overview" in result.output
+    assert "review" in result.output
+    assert "overview" in result.output
+
+
+def test_analyze_invalid_type(runner: CliRunner, cli: click.Group) -> None:
+    """Invalid analysis_type triggers Click validation error."""
+    result = runner.invoke(cli, ["fcio", "analyze", "invalid_type"])
+    assert result.exit_code == 2
+    assert "invalid value" in result.output.lower()
+    assert "not one of" in result.output
+
+
+def test_analyze_no_code_files(runner: CliRunner, cli: click.Group) -> None:
+    """No code files found shows error message."""
+    with patch("llm_fcio.collect_code_files", return_value=[]):
+        result = runner.invoke(cli, ["fcio", "analyze", "review"])
+    assert result.exit_code == 1
+    assert "No code files found" in result.output

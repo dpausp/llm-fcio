@@ -21,15 +21,6 @@ from httpx_sse import connect_sse
 from pydantic import Field
 from rich.console import Console
 from rich.markdown import Markdown
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
 from rich.syntax import Syntax
 from rich.text import Text
 
@@ -263,35 +254,70 @@ def api_request(
         return response
 
 
+@dataclass(slots=True)
+class _SSEMetadata:
+    """Accumulated metadata from SSE streaming events."""
+
+    finish_reason: str | None = None
+    usage: dict | None = None
+
+
+def _apply_usage(response: llm.Response, usage: dict | None) -> None:
+    """Set token usage on the response object from API usage dict."""
+    if not usage:
+        return
+    response.set_usage(
+        input=usage.get("prompt_tokens"),
+        output=usage.get("completion_tokens"),
+        details={k: v for k, v in usage.items() if k not in ("prompt_tokens", "completion_tokens")},
+    )
+
+
 def _iter_sse_content(
     client: httpx.Client,
     url: str,
     headers: dict,
     body: dict,
-) -> Iterator[str]:
-    """Yield content deltas from an SSE streaming response."""
-    with connect_sse(
-        client,
-        "POST",
-        url,
-        headers=headers,
-        json=body,
-        timeout=None,
-    ) as event_source:
-        event_source.response.raise_for_status()
-        for sse in event_source.iter_sse():
-            if sse.data == "[DONE]":
-                continue
-            try:
-                event = json.loads(sse.data)
+) -> tuple[_SSEMetadata, Iterator[str]]:
+    """Yield content deltas from SSE streaming response and collect metadata.
+
+    Returns a tuple of (metadata, content_iterator). The metadata is
+    populated as the iterator is consumed — read it after iteration completes.
+    """
+    meta = _SSEMetadata()
+
+    def _generate() -> Iterator[str]:
+        with connect_sse(
+            client,
+            "POST",
+            url,
+            headers=headers,
+            json=body,
+            timeout=None,
+        ) as event_source:
+            event_source.response.raise_for_status()
+            for sse in event_source.iter_sse():
+                if sse.data == "[DONE]":
+                    continue
+                try:
+                    event = json.loads(sse.data)
+                except json.JSONDecodeError:
+                    continue
+                # Collect usage from top-level event (final chunk)
+                if "usage" in event and event["usage"]:
+                    meta.usage = event["usage"]
                 choices = event.get("choices", [])
                 if not choices:
                     continue
-                delta = choices[0].get("delta", {})
+                choice = choices[0]
+                # Collect finish_reason
+                if choice.get("finish_reason"):
+                    meta.finish_reason = choice["finish_reason"]
+                delta = choice.get("delta", {})
                 if delta.get("content"):
                     yield delta["content"]
-            except KeyError, json.JSONDecodeError, IndexError:
-                continue
+
+    return meta, _generate()
 
 
 # ── Hard-coded Models ──────────────────────────────────
@@ -448,8 +474,14 @@ class RzobModel(llm.KeyModel):
             body["stream"] = True
             with _make_client(verbose=_VERBOSE, debug=_DEBUG) as client:
                 url = f"{api_base}/chat/completions"
-                for content in _iter_sse_content(client, url, headers, body):
-                    yield content
+                meta, content_iter = _iter_sse_content(client, url, headers, body)
+                yield from content_iter
+            # Populate response metadata after iteration completes
+            response.response_json = {
+                "finish_reason": meta.finish_reason,
+                "usage": meta.usage or {},
+            }
+            _apply_usage(response, meta.usage)
         else:
             with _make_client(verbose=_VERBOSE, debug=_DEBUG) as client:
                 resp = client.post(
@@ -463,6 +495,7 @@ class RzobModel(llm.KeyModel):
                 content = _extract_content(data)
                 yield content
                 response.response_json = data
+                _apply_usage(response, data.get("usage"))
 
 
 # ── Embedding Model ──────────────────────────────────────
@@ -1028,7 +1061,12 @@ def get_capabilities(loc_name: str = DEFAULT_LOCATION) -> dict:
                 "param": "stream",
             },
             "embeddings": {"status": embed_status, "method": "POST", "path": "/embeddings"},
-            "schema_output": {"status": schema_status, "method": "POST", "path": "/chat/completions", "param": "response_format"},
+            "schema_output": {
+                "status": schema_status,
+                "method": "POST",
+                "path": "/chat/completions",
+                "param": "response_format",
+            },
         },
     }
 
@@ -1101,9 +1139,8 @@ def ingest_files(
         col = llm.Collection(collection, db=db, model_id=model_id)
 
     def _gen() -> Iterator[tuple[str, str]]:
-        for name, chunks in file_chunks.items():
-            for cid, text in chunks:
-                yield cid, text
+        for _name, chunks in file_chunks.items():
+            yield from chunks
 
     col.embed_multi(_gen(), store=True)
     return total_chunks
@@ -1126,10 +1163,7 @@ def analyze_code(
 
     Returns the generated analysis text.
     """
-    if files:
-        resolved = [Path(f).resolve() for f in files]
-    else:
-        resolved = collect_code_files(Path.cwd())
+    resolved = [Path(f).resolve() for f in files] if files else collect_code_files(Path.cwd())
 
     if not resolved:
         return ""
@@ -1142,6 +1176,141 @@ def analyze_code(
 
     response = m.prompt(fragments=fragments, system=TEMPLATES[analysis_type])
     return response.text()
+
+
+# ── Pytest Failure Analyzer ──────────────────────────────
+
+
+_FOCUS_INSTRUCTIONS: dict[str, str] = {
+    "quick": "Provide a brief summary of the test failures.",
+    "fix": "Provide code suggestions to fix the test failures.",
+    "root-cause": "Perform a deep root-cause analysis of the test failures.",
+}
+
+
+def collect_failures(reports: list[Any]) -> list[dict[str, str]]:
+    """Extract failure information from pytest TestReport-like objects.
+
+    Returns a list of dicts with keys: test_name, outcome, message, traceback.
+    Only includes reports where outcome is "failed".
+    """
+    failures: list[dict[str, str]] = []
+    for report in reports:
+        if report.outcome != "failed":
+            continue
+        if report.call is not None and report.call.excinfo is not None:
+            message = report.call.excinfo.exconly()
+        else:
+            message = str(report.longrepr)
+        failures.append(
+            {
+                "test_name": report.nodeid,
+                "outcome": report.outcome,
+                "message": message,
+                "traceback": str(report.longrepr),
+            }
+        )
+    return failures
+
+
+def build_failure_prompt(failures: list[dict[str, str]], focus: str = "quick") -> str:
+    """Build an LLM prompt from a list of failure dicts.
+
+    The focus parameter controls the instruction style:
+    - "quick": brief summary instruction
+    - "fix": include code suggestions instruction
+    - "root-cause": deep analysis instruction
+    """
+    if not failures:
+        return "No test failures found."
+    instruction = _FOCUS_INSTRUCTIONS.get(focus, _FOCUS_INSTRUCTIONS["quick"])
+    parts: list[str] = [instruction, ""]
+    for failure in failures:
+        parts.append(f"Test: {failure['test_name']}")
+        parts.append(f"Message: {failure['message']}")
+        parts.append("")
+    return "\n".join(parts)
+
+
+def analyze_failures(
+    failures: list[dict[str, str]],
+    focus: str = "quick",
+    model_id: str | None = None,
+    loc_name: str = DEFAULT_LOCATION,
+) -> str:
+    """Send failure information to an LLM for analysis.
+
+    Uses :func:`build_failure_prompt` to construct the prompt,
+    then sends it to the default FCIO chat model.
+
+    Returns the model's response text, or ``""`` if *failures* is empty.
+    """
+    if not failures:
+        return ""
+
+    prompt_text = build_failure_prompt(failures, focus=focus)
+
+    if model_id is None:
+        model_id = f"fcio-{loc_name}/gpt-oss-20b-20b"
+    m = llm.get_model(model_id)
+
+    response = m.prompt(prompt_text)
+    return response.text()
+
+
+# ── Pytest Plugin Hooks ─────────────────────────────────────
+
+
+def pytest_addoption(parser: Any) -> None:  # noqa: ANN401
+    """Register FCIO failure analyzer CLI options."""
+    group = parser.getgroup("fcio", "FCIO Failure Analyzer")
+    group.addoption(
+        "--fcio-analyze",
+        action="store_true",
+        default=False,
+        help="Enable FCIO LLM-powered test failure analysis",
+    )
+    group.addoption(
+        "--fcio-focus",
+        choices=["quick", "fix", "root-cause"],
+        default="quick",
+        help="Analysis focus: quick, fix, or root-cause (default: quick)",
+    )
+    group.addoption(
+        "--fcio-model",
+        default=None,
+        help="Override model for failure analysis",
+    )
+
+
+def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: Any) -> None:  # noqa: ANN401
+    """When --fcio-analyze is active, analyze failures and print results."""
+    if not config.getoption("--fcio-analyze"):
+        return
+
+    failed_reports = terminalreporter.stats.get("failed", [])
+    if not failed_reports:
+        return
+
+    failures = collect_failures(failed_reports)
+    if not failures:
+        return
+
+    focus = config.getoption("--fcio-focus")
+    model_id = config.getoption("--fcio-model")
+
+    try:
+        analysis = analyze_failures(failures, focus=focus, model_id=model_id)
+    except Exception as exc:  # noqa: BLE001 — must not crash the test run
+        terminalreporter.write_line("FCIO Failure Analysis: ERROR", bold=True)
+        terminalreporter.write_line(f"  {exc}")
+        return
+
+    if not analysis:
+        return
+
+    terminalreporter.write_line("FCIO Failure Analysis", bold=True)
+    terminalreporter.write_line(analysis)
 
 
 # ── CLI Commands ────────────────────────────────────────
@@ -1394,10 +1563,18 @@ def cmd_capabilities(ctx: click.Context, as_json: bool) -> None:
 
     feats = result["features"]
     click.echo("Features:")
-    click.echo(f"  Chat completions:  {_status_icon(feats['chat_completions']['status'])} (POST /chat/completions)")
-    click.echo(f"  Streaming:         {_status_icon(feats['streaming']['status'])} (POST /chat/completions, stream)")
-    click.echo(f"  Schema output:     {_status_icon(feats['schema_output']['status'])} (POST /chat/completions, response_format)")
-    click.echo(f"  Embeddings:        {_status_icon(feats['embeddings']['status'])} (POST /embeddings)")
+    click.echo(
+        f"  Chat completions:  {_status_icon(feats['chat_completions']['status'])} (POST /chat/completions)"
+    )
+    click.echo(
+        f"  Streaming:         {_status_icon(feats['streaming']['status'])} (POST /chat/completions, stream)"
+    )
+    click.echo(
+        f"  Schema output:     {_status_icon(feats['schema_output']['status'])} (POST /chat/completions, response_format)"
+    )
+    click.echo(
+        f"  Embeddings:        {_status_icon(feats['embeddings']['status'])} (POST /embeddings)"
+    )
 
     # ── simulate ────────────────────────────────────────────
 
@@ -1522,7 +1699,7 @@ def cmd_tokens(ctx: click.Context, text: tuple[str], model_id: str, as_json: boo
     if as_json:
         click.echo(json.dumps(result, indent=2))
     elif result.get("_fallback"):
-        click.echo(f"\u26a0\ufe0f  Token endpoint not supported, using heuristic", err=True)
+        click.echo("\u26a0\ufe0f  Token endpoint not supported, using heuristic", err=True)
         click.echo(f"Rough estimate: ~{result.get('prompt_tokens', '?')} tokens (heuristic)")
     else:
         click.echo(f"Model: {model_id}")
@@ -1722,7 +1899,8 @@ def _stream_chat_response(key: str, body: dict, api_base: str, render: bool) -> 
         with _make_client(verbose=_VERBOSE, debug=_DEBUG) as client:
             url = f"{api_base}/chat/completions"
             headers = _auth_headers(key)
-            for content in _iter_sse_content(client, url, headers, body):
+            meta, content_iter = _iter_sse_content(client, url, headers, body)
+            for content in content_iter:
                 if render and renderer is not None:
                     renderer.feed(content)
                 else:

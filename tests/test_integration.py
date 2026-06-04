@@ -235,14 +235,13 @@ def test_iter_sse_yields_content_deltas(api_key: str) -> None:
             )
         )
         with httpx.Client() as client:
-            chunks = list(
-                _iter_sse_content(
-                    client,
-                    f"{API_BASE}/chat/completions",
-                    {"Authorization": f"Bearer {api_key}"},
-                    {"model": "test", "messages": [], "stream": True},
-                )
+            meta, content_iter = _iter_sse_content(
+                client,
+                f"{API_BASE}/chat/completions",
+                {"Authorization": f"Bearer {api_key}"},
+                {"model": "test", "messages": [], "stream": True},
             )
+            chunks = list(content_iter)
     assert chunks == ["Hello", " world"]
 
 
@@ -263,14 +262,13 @@ def test_iter_sse_done_sentinel_skipped(api_key: str) -> None:
             )
         )
         with httpx.Client() as client:
-            chunks = list(
-                _iter_sse_content(
-                    client,
-                    f"{API_BASE}/chat/completions",
-                    {"Authorization": f"Bearer {api_key}"},
-                    {"model": "test", "messages": [], "stream": True},
-                )
+            meta, content_iter = _iter_sse_content(
+                client,
+                f"{API_BASE}/chat/completions",
+                {"Authorization": f"Bearer {api_key}"},
+                {"model": "test", "messages": [], "stream": True},
             )
+            chunks = list(content_iter)
     assert chunks == ["Hi"]
 
 
@@ -292,14 +290,13 @@ def test_iter_sse_empty_choices_skipped(api_key: str) -> None:
             )
         )
         with httpx.Client() as client:
-            chunks = list(
-                _iter_sse_content(
-                    client,
-                    f"{API_BASE}/chat/completions",
-                    {"Authorization": f"Bearer {api_key}"},
-                    {"model": "test", "messages": [], "stream": True},
-                )
+            meta, content_iter = _iter_sse_content(
+                client,
+                f"{API_BASE}/chat/completions",
+                {"Authorization": f"Bearer {api_key}"},
+                {"model": "test", "messages": [], "stream": True},
             )
+            chunks = list(content_iter)
     assert chunks == ["data"]
 
 
@@ -321,14 +318,13 @@ def test_iter_sse_malformed_json_skipped(api_key: str) -> None:
             )
         )
         with httpx.Client() as client:
-            chunks = list(
-                _iter_sse_content(
-                    client,
-                    f"{API_BASE}/chat/completions",
-                    {"Authorization": f"Bearer {api_key}"},
-                    {"model": "test", "messages": [], "stream": True},
-                )
+            meta, content_iter = _iter_sse_content(
+                client,
+                f"{API_BASE}/chat/completions",
+                {"Authorization": f"Bearer {api_key}"},
+                {"model": "test", "messages": [], "stream": True},
             )
+            chunks = list(content_iter)
     assert chunks == ["ok"]
 
 
@@ -350,14 +346,13 @@ def test_iter_sse_delta_without_content_skipped(api_key: str) -> None:
             )
         )
         with httpx.Client() as client:
-            chunks = list(
-                _iter_sse_content(
-                    client,
-                    f"{API_BASE}/chat/completions",
-                    {"Authorization": f"Bearer {api_key}"},
-                    {"model": "test", "messages": [], "stream": True},
-                )
+            meta, content_iter = _iter_sse_content(
+                client,
+                f"{API_BASE}/chat/completions",
+                {"Authorization": f"Bearer {api_key}"},
+                {"model": "test", "messages": [], "stream": True},
             )
+            chunks = list(content_iter)
     assert chunks == ["yes"]
 
 
@@ -379,14 +374,13 @@ def test_iter_sse_empty_delta_content_skipped(api_key: str) -> None:
             )
         )
         with httpx.Client() as client:
-            chunks = list(
-                _iter_sse_content(
-                    client,
-                    f"{API_BASE}/chat/completions",
-                    {"Authorization": f"Bearer {api_key}"},
-                    {"model": "test", "messages": [], "stream": True},
-                )
+            meta, content_iter = _iter_sse_content(
+                client,
+                f"{API_BASE}/chat/completions",
+                {"Authorization": f"Bearer {api_key}"},
+                {"model": "test", "messages": [], "stream": True},
             )
+            chunks = list(content_iter)
     assert chunks == ["real"]
 
 
@@ -486,6 +480,130 @@ def test_execute_streaming(
     )
     chunks = list(rzob_model.execute(simple_prompt, True, simple_response, None, api_key))
     assert chunks == ["Hi", " there"]
+
+
+def test_execute_non_streaming_sets_usage(
+    mocked_api: MockRouter,
+    rzob_model: RzobModel,
+    simple_prompt: llm.Prompt,
+    simple_response: llm.Response,
+    api_key: str,
+) -> None:
+    """Non-streaming execute calls response.set_usage() with token counts."""
+    mocked_api.post(f"{API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "Hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+    )
+    list(rzob_model.execute(simple_prompt, False, simple_response, None, api_key))
+    assert simple_response.input_tokens == 10
+    assert simple_response.output_tokens == 5
+    assert simple_response.token_details == {"total_tokens": 15}
+
+
+def test_execute_non_streaming_finish_reason_in_response_json(
+    mocked_api: MockRouter,
+    rzob_model: RzobModel,
+    simple_prompt: llm.Prompt,
+    simple_response: llm.Response,
+    api_key: str,
+) -> None:
+    """Non-streaming execute preserves finish_reason in response_json."""
+    mocked_api.post(f"{API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "Hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        )
+    )
+    list(rzob_model.execute(simple_prompt, False, simple_response, None, api_key))
+    assert simple_response.response_json is not None
+    choices = simple_response.response_json["choices"]
+    assert choices[0]["finish_reason"] == "stop"
+
+
+def test_execute_streaming_sets_usage(
+    mocked_api: MockRouter,
+    rzob_model: RzobModel,
+    simple_prompt: llm.Prompt,
+    simple_response: llm.Response,
+    api_key: str,
+) -> None:
+    """Streaming execute captures usage from final SSE event."""
+    payload = _sse_stream(
+        [
+            '{"choices":[{"delta":{"content":"Hi"}}]}',
+            '{"choices":[{"delta":{},"finish_reason":"stop"}]}',
+            '{"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}',
+            "[DONE]",
+        ]
+    )
+    mocked_api.post(f"{API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            content=payload,
+            headers={"Content-Type": "text/event-stream"},
+        )
+    )
+    list(rzob_model.execute(simple_prompt, True, simple_response, None, api_key))
+    assert simple_response.input_tokens == 8
+    assert simple_response.output_tokens == 3
+    assert simple_response.token_details == {"total_tokens": 11}
+
+
+def test_execute_streaming_sets_response_json(
+    mocked_api: MockRouter,
+    rzob_model: RzobModel,
+    simple_prompt: llm.Prompt,
+    simple_response: llm.Response,
+    api_key: str,
+) -> None:
+    """Streaming execute sets response_json with finish_reason and usage."""
+    payload = _sse_stream(
+        [
+            '{"choices":[{"delta":{"content":"Hi"}}]}',
+            '{"choices":[{"delta":{},"finish_reason":"stop"}]}',
+            '{"usage":{"prompt_tokens":4,"completion_tokens":1,"total_tokens":5}}',
+            "[DONE]",
+        ]
+    )
+    mocked_api.post(f"{API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            content=payload,
+            headers={"Content-Type": "text/event-stream"},
+        )
+    )
+    list(rzob_model.execute(simple_prompt, True, simple_response, None, api_key))
+    assert simple_response.response_json is not None
+    assert simple_response.response_json["finish_reason"] == "stop"
+    assert simple_response.response_json["usage"]["prompt_tokens"] == 4
+
+
+def test_execute_non_streaming_no_usage_graceful(
+    mocked_api: MockRouter,
+    rzob_model: RzobModel,
+    simple_prompt: llm.Prompt,
+    simple_response: llm.Response,
+    api_key: str,
+) -> None:
+    """Non-streaming execute works without usage data in API response."""
+    mocked_api.post(f"{API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "Hi"}, "finish_reason": "stop"}]},
+        )
+    )
+    chunks = list(rzob_model.execute(simple_prompt, False, simple_response, None, api_key))
+    assert chunks == ["Hi"]
+    assert simple_response.input_tokens is None
+    assert simple_response.output_tokens is None
 
 
 def test_execute_empty_choices_raises_api_error(
