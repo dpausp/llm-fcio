@@ -30,6 +30,7 @@ dev = [
     "pip-audit>=0.3.0",
     "hypothesis>=6.0.0",
     "skvaider",
+    "complexipy>=5.5.0",
 ]
 [tool.pytest.ini_options]
 addopts = ["--tb=short", "--cov=llm_fcio", "--cov-report=term-missing", "--durations=0"]
@@ -54,7 +55,7 @@ ignore = ["E501", "TC003"]
 quote-style = "double"
 
 [tool.tox]
-env_list = ["lint", "type", "cov"]
+env_list = ["lint", "type", "complexity", "cov"]
 
 [tool.tox.env_run_base]
 runner = "uv-venv-lock-runner"
@@ -75,6 +76,12 @@ skip_install = true
 allowlist_externals = ["ty"]
 commands = [
   ["ty", "check", "llm_fcio.py"],
+]
+
+[tool.tox.env.complexity]
+description = "Check cyclomatic complexity with complexipy"
+commands = [
+  ["complexipy", "llm_fcio.py", "--max-complexity-allowed", "15"],
 ]
 
 [tool.tox.env.cov]
