@@ -18,10 +18,14 @@ import threading
 import time
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import llm
 import pytest
 import uvicorn
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 try:
     import svcs
@@ -51,9 +55,7 @@ TEST_TOKEN = "test-admin-token"
 
 
 @svcs.fastapi.lifespan
-async def _test_lifespan(
-    app, registry: svcs.Registry
-) -> AsyncGenerator[None]:
+async def _test_lifespan(app: FastAPI, registry: svcs.Registry) -> AsyncGenerator[None]:
     """Set up a DummyBackend with test models in the skvaider pool."""
     backend = DummyBackend("http://dummy-backend")
     backend.healthy = True
@@ -104,7 +106,7 @@ async def _test_lifespan(
 @pytest.fixture(scope="session")
 def skvaider_server_port(
     tmp_path_factory: pytest.TempPathFactory,
-) -> Generator[int, None, None]:
+) -> Generator[int]:
     """Start skvaider with DummyBackend on a random port, yield port, then shutdown.
 
     Uses the same uvicorn.Server + threading.Thread pattern as
@@ -153,9 +155,7 @@ def skvaider_api_base(skvaider_server_port: int) -> str:
 
 
 @pytest.fixture()
-def patched_locations(
-    skvaider_api_base: str, monkeypatch: pytest.MonkeyPatch
-) -> Location:
+def patched_locations(skvaider_api_base: str, monkeypatch: pytest.MonkeyPatch) -> Location:
     """Monkey-patch LOCATIONS['rzob'] to point to the skvaider server.
 
     The plugin makes real HTTP requests to the uvicorn server — no ASGI transport
@@ -200,7 +200,7 @@ class TestSkvaiderE2E:
     """
 
     @pytest.mark.e2e
-    def test_list_models(self, patched_locations, patched_api_key) -> None:
+    def test_list_models(self, patched_locations: Location, patched_api_key: None) -> None:
         """list_models returns models registered in DummyBackend."""
         models = llm_fcio.list_models()
         assert len(models) == 2
@@ -210,7 +210,7 @@ class TestSkvaiderE2E:
 
     @pytest.mark.e2e
     def test_list_models_with_filter(
-        self, patched_locations, patched_api_key
+        self, patched_locations: Location, patched_api_key: None
     ) -> None:
         """list_models with substring filter returns matching subset."""
         models = llm_fcio.list_models(filter="gpt-oss:120b")
@@ -218,9 +218,7 @@ class TestSkvaiderE2E:
         assert models[0]["id"] == "gpt-oss:120b"
 
     @pytest.mark.e2e
-    def test_get_model_info(
-        self, patched_locations, patched_api_key
-    ) -> None:
+    def test_get_model_info(self, patched_locations: Location, patched_api_key: None) -> None:
         """get_model_info returns details for a specific model."""
         info = llm_fcio.get_model_info("gpt-oss:20b")
         assert info["id"] == "gpt-oss:20b"
@@ -228,7 +226,7 @@ class TestSkvaiderE2E:
 
     @pytest.mark.e2e
     def test_get_model_info_unknown(
-        self, patched_locations, patched_api_key
+        self, patched_locations: Location, patched_api_key: None
     ) -> None:
         """get_model_info raises ModelError for unknown model."""
         with pytest.raises(llm_fcio.ModelError, match="Model not found"):
@@ -236,7 +234,7 @@ class TestSkvaiderE2E:
 
     @pytest.mark.e2e
     def test_refresh_models(
-        self, patched_locations, patched_api_key, user_dir
+        self, patched_locations: Location, patched_api_key: None, user_dir: Path
     ) -> None:
         """refresh_models fetches models from API and caches them."""
         models = llm_fcio.refresh_models()
@@ -252,7 +250,7 @@ class TestSkvaiderE2E:
 
     @pytest.mark.e2e
     def test_get_cached_models(
-        self, patched_locations, patched_api_key, user_dir
+        self, patched_locations: Location, patched_api_key: None, user_dir: Path
     ) -> None:
         """get_cached_models reads from cache without calling API."""
         # First refresh to populate cache
@@ -265,14 +263,13 @@ class TestSkvaiderE2E:
 
     @pytest.mark.e2e
     def test_get_cached_models_empty(
-        self, patched_locations, patched_api_key, user_dir
+        self, patched_locations: Location, patched_api_key: None, user_dir: Path
     ) -> None:
         """get_cached_models returns [] when no cache exists."""
         assert llm_fcio.get_cached_models() == []
+
     @pytest.mark.e2e
-    def test_get_capabilities(
-        self, patched_locations, patched_api_key
-    ) -> None:
+    def test_get_capabilities(self, patched_locations: Location, patched_api_key: None) -> None:
         """get_capabilities probes endpoints and returns structured result."""
         result = llm_fcio.get_capabilities()
 
@@ -294,25 +291,21 @@ class TestSkvaiderE2E:
         # Chat completions probe returns "available" even when model
         # does not exist (skvaider returns 400 with "model" in error,
         # which _probe_endpoint treats as "available")
-        assert (
-            features["chat_completions"]["status"] == "available"
-        ), f"chat status: {features['chat_completions']['status']}"
-        assert (
-            features["streaming"]["status"] == "available"
-        ), f"stream status: {features['streaming']['status']}"
+        assert features["chat_completions"]["status"] == "available", (
+            f"chat status: {features['chat_completions']['status']}"
+        )
+        assert features["streaming"]["status"] == "available", (
+            f"stream status: {features['streaming']['status']}"
+        )
         # Embeddings also returns "available" via the model error marker
-        assert (
-            features["embeddings"]["status"] == "available"
-        ), f"embed status: {features['embeddings']['status']}"
+        assert features["embeddings"]["status"] == "available", (
+            f"embed status: {features['embeddings']['status']}"
+        )
 
     @pytest.mark.e2e
-    def test_estimate_tokens(
-        self, patched_locations, patched_api_key
-    ) -> None:
+    def test_estimate_tokens(self, patched_locations: Location, patched_api_key: None) -> None:
         """estimate_tokens returns token usage estimate."""
-        result = llm_fcio.estimate_tokens(
-            "Hello world", model_id="gpt-oss:20b"
-        )
+        result = llm_fcio.estimate_tokens("Hello world", model_id="gpt-oss:20b")
         # DummyBackend returns {"id": "cmpl-1", "choices": []} with no
         # usage data, so estimate_tokens returns the raw usage dict
         # (empty in this case since the API response lacks "usage").

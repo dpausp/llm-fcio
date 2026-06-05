@@ -335,7 +335,7 @@ def _count_captured(
 ) -> int:
     """Count registrations matching location and model id substring."""
     count = 0
-    for model, kwargs in captured:
+    for model, _kwargs in captured:
         mid: str = model.model_id
         if f"fcio-{loc_name}/" in mid and id_substring in mid:
             count += 1
@@ -355,8 +355,7 @@ def _assert_register_called_once(
         if model.model_id == f"fcio-{loc_name}/{expected_id}"
     ]
     assert len(matches) == 1, (
-        f"Expected 1 registration for fcio-{loc_name}/{expected_id}, "
-        f"got {len(matches)}"
+        f"Expected 1 registration for fcio-{loc_name}/{expected_id}, got {len(matches)}"
     )
     _model, kwargs = matches[0]
     assert kwargs.get("aliases") == expected_aliases, (
@@ -375,8 +374,10 @@ _INJECTED_ALIASES: dict[str, list[str]] = {
 
 def _register_spy(captured: list) -> object:
     """Factory: create a register callback that appends (model, kwargs) tuples."""
+
     def _register(model: object, **kwargs: object) -> None:
         captured.append((model, kwargs))
+
     return _register
 
 

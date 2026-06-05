@@ -50,17 +50,17 @@ def create_app() -> FastAPI:
     app = FastAPI()
 
     @app.get("/v1/models")
-    async def list_models():
+    async def list_models() -> dict:
         return {"data": SAMPLE_MODELS, "object": "list"}
 
     @app.get("/v1/models/{model_id}")
-    async def get_model(model_id: str):
+    async def get_model(model_id: str) -> dict:
         for m in SAMPLE_MODELS:
             if m["id"] == model_id:
                 return {"data": m}
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
 
-    async def _sse_chunks(content: str, model_id: str) -> AsyncGenerator[str, None]:
+    async def _sse_chunks(content: str, model_id: str) -> AsyncGenerator[str]:
         """Yield SSE events for streaming chat completion."""
         chunk_size = 8
         for i in range(0, max(1, len(content)), chunk_size):
@@ -89,8 +89,8 @@ def create_app() -> FastAPI:
         yield f"data: {json.dumps(final)}\n\n"
         yield "data: [DONE]\n\n"
 
-    @app.post("/v1/chat/completions")
-    async def chat_completions(body: dict):
+    @app.post("/v1/chat/completions", response_model=None)
+    async def chat_completions(body: dict) -> StreamingResponse | dict:  # noqa: ANN401
         """Return realistic OpenAI chat completion response.
 
         Supports both streaming (SSE) and non-streaming modes.
@@ -142,7 +142,7 @@ def create_app() -> FastAPI:
         }
 
     @app.post("/v1/embeddings")
-    async def embeddings(body: dict):
+    async def embeddings(body: dict) -> dict:
         """Return realistic OpenAI embedding response."""
         if "_probe_test" in body.get("model", ""):
             raise HTTPException(
@@ -178,7 +178,7 @@ def create_app() -> FastAPI:
 
 
 @pytest.fixture(scope="session")
-def dummy_server_port() -> Generator[int, None, None]:
+def dummy_server_port() -> Generator[int]:
     """Start the dummy server on a random port, yield port, then shutdown."""
     app = create_app()
     config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error")
@@ -487,7 +487,7 @@ class TestE2E:
         doc.write_text("# Test\nHello world\nThis is a test file.\n")
 
         with (
-            patch("llm_fcio.sqlite_utils.Database") as mock_db,
+            patch("llm_fcio.sqlite_utils.Database"),
             patch("llm_fcio.llm.Collection") as mock_collection_cls,
         ):
             mock_col = MagicMock()
@@ -636,9 +636,10 @@ class TestStreamingRendererE2E:
     """
 
     @pytest.fixture()
-    def with_renderer(self, monkeypatch):
+    def with_renderer(self, monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
         """Install the streaming renderer patch for testing."""
         import llm
+
         import llm_fcio
 
         saved = llm.Response.__iter__
@@ -648,13 +649,18 @@ class TestStreamingRendererE2E:
         llm.Response.__iter__ = saved
 
     @pytest.fixture()
-    def env_key(self, monkeypatch):
+    def env_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Set API key via environment variable for KeyModel.get_key()."""
         monkeypatch.setenv("FCIO_RZOB_API_KEY", TEST_KEY)
 
     @pytest.mark.e2e
     def test_streaming_single_output(
-        self, patch_location, env_key, user_dir, with_renderer, capsys
+        self,
+        patch_location: Location,
+        env_key: None,
+        user_dir: Path,
+        with_renderer: None,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Streaming through patched __iter__ outputs text exactly once.
 
@@ -683,7 +689,12 @@ class TestStreamingRendererE2E:
 
     @pytest.mark.e2e
     def test_non_streaming_single_output(
-        self, patch_location, env_key, user_dir, with_renderer, capsys
+        self,
+        patch_location: Location,
+        env_key: None,
+        user_dir: Path,
+        with_renderer: None,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Non-streaming response through patched __iter__ outputs text exactly once."""
         from llm_fcio import LOCATIONS, RzobModel
@@ -706,10 +717,16 @@ class TestStreamingRendererE2E:
 
     @pytest.mark.e2e
     def test_renderer_fallback_yields_chunks(
-        self, patch_location, env_key, user_dir, monkeypatch, capsys
+        self,
+        patch_location: Location,
+        env_key: None,
+        user_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """When renderer.feed() fails, chunks are yielded as fallback."""
         import llm
+
         import llm_fcio
         from llm_fcio import LOCATIONS, RzobModel
 

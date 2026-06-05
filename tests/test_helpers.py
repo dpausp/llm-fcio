@@ -11,7 +11,6 @@ import pytest
 
 from llm_fcio import ApiError, _b32c_encode, _extract_content, _generate_lid, _mask_auth_header
 
-
 # ── _b32c_encode ─────────────────────────────────────────────────
 
 

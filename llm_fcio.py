@@ -457,7 +457,7 @@ class RzobModel(llm.KeyModel):
             body["tools"] = prompt.options.tools  # ty: ignore[unresolved-attribute]
         if prompt.options.response_format is not None:  # ty: ignore[unresolved-attribute]
             body["response_format"] = prompt.options.response_format  # ty: ignore[unresolved-attribute]
-        if prompt.schema:  # ty: ignore[unresolved-attribute]
+        if prompt.schema:
             body["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {"name": "response", "schema": prompt.schema},
@@ -1175,7 +1175,7 @@ def analyze_code(
         model_id = f"fcio-{loc_name}/gpt-oss-20b-20b"
     m = llm.get_model(model_id)
 
-    response = m.prompt(fragments=fragments, system=TEMPLATES[analysis_type])
+    response = m.prompt(fragments=fragments, system=TEMPLATES[analysis_type])  # ty: ignore[invalid-argument-type]
     return response.text()
 
 
