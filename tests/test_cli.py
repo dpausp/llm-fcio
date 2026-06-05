@@ -1452,3 +1452,41 @@ def test_analyze_no_code_files(runner: CliRunner, cli: click.Group) -> None:
         result = runner.invoke(cli, ["fcio", "analyze", "review"])
     assert result.exit_code == 1
     assert "No code files found" in result.output
+
+
+# ── Template system ────────────────────────────────────────────────
+
+
+def test_templates_dict_contains_review() -> None:
+    """TEMPLATES dict has 'review' key."""
+    from llm_fcio import TEMPLATES
+
+    assert "review" in TEMPLATES
+
+
+def test_templates_dict_contains_overview() -> None:
+    """TEMPLATES dict has 'overview' key."""
+    from llm_fcio import TEMPLATES
+
+    assert "overview" in TEMPLATES
+
+
+def test_template_loader_returns_llm_template_instances() -> None:
+    """fcio_template_loader maps name to llm.Template instances."""
+    import llm
+
+    from llm_fcio import fcio_template_loader
+
+    templates = fcio_template_loader()
+    for name, tmpl in templates.items():
+        assert isinstance(tmpl, llm.Template), f"{name} is not an llm.Template"
+
+
+def test_templates_available_via_fcio_prefix() -> None:
+    """Templates available as fcio:<name>."""
+    from llm_fcio import fcio_template_loader
+
+    templates = fcio_template_loader()
+    assert all(isinstance(name, str) for name in templates)
+    assert "review" in templates
+    assert "overview" in templates
