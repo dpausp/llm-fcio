@@ -16,6 +16,9 @@ class FakeResponse:
     def __iter__(self) -> Iterator[str]:
         return iter(self._chunks)
 
+    def text(self) -> str:
+        return "".join(self._chunks)
+
 
 class FakeModel:
     """Minimal fake for llm.Model — prompt() returns FakeResponse, has model_id."""
@@ -25,8 +28,12 @@ class FakeModel:
     def __init__(self, response: FakeResponse | None = None, model_id: str = "test-model") -> None:
         self._response = response or FakeResponse()
         self.model_id = model_id
+        self.last_prompt_args: tuple[object, ...] = ()
+        self.last_prompt_kwargs: dict[str, object] = {}
 
     def prompt(self, *args: object, **kwargs: object) -> FakeResponse:
+        self.last_prompt_args = args
+        self.last_prompt_kwargs = kwargs
         return self._response
 
 

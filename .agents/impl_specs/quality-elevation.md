@@ -85,6 +85,27 @@ Extract a shared generator function `_iter_sse_content(client, url, headers, bod
 
 Each function loses 15–20 lines of inline SSE logic. Nesting drops from 7 to ~3 levels. The duplicated logic is eliminated.
 
+### complexity-gate
+
+#### Context
+
+`complexipy` CC analysis integrated as tox env with threshold 15. Five functions currently exceed this limit: `_iter_sse_content` (CC=25), `cmd_capabilities` (CC=19), `_make_client` (CC=18), `_build_messages` (CC=17), `_stream_chat_response` (CC=17). The `nesting-reduction` decision addressed SSE duplication but `_iter_sse_content` itself is still too complex.
+
+#### Decision
+
+Extract helper functions from each of the 5 violating functions until all reach CC<=15. Follow the established extraction pattern (private `_snake_case` functions, single responsibility, full type annotations).
+
+Specific extractions:
+- `_build_messages`: extract `_conversation_messages(conversation)` for history iteration, extract `_build_user_content(prompt)` for attachment/user content assembly.
+- `_make_client`: extract `_make_request_hook(debug_id, verbose)` returning the `_on_request` closure, extract `_make_response_hook(verbose)` returning the `_on_response` closure.
+- `_iter_sse_content`: extract `_parse_sse_event(data)` for [DONE] check + JSON parse, extract `_handle_sse_event(event, meta)` for metadata + content extraction.
+- `_stream_chat_response`: extract `_render_or_echo(content_iter, renderer)` for the streaming loop + flush.
+- `cmd_capabilities`: extract `_format_capabilities_text(result)` for text output (everything after JSON dispatch), promote nested `_print_models` to `_print_models_section` at module level, promote nested `_status_icon` to `_format_feature_status` at module level.
+
+#### Consequences
+
+All functions pass `complexipy --max-complexity-allowed 15`. No behavioral change — pure structural refactoring. Existing tests remain the safety net and must NOT be modified.
+
 ### dead-code-forwarding
 
 #### Context

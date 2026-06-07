@@ -73,11 +73,14 @@ All HTTP calls go through `httpx` with Bearer token auth. Key resolution:
 ### SSE Streaming
 
 Chat completions support SSE streaming via `httpx-sse`. The core is
-`_iter_sse_content(client, url, headers, body) -> Iterator[str]` — a shared
+`_iter_sse_content(client, url, headers, body) -> tuple[_SSEMetadata, Iterator[str]]` — a shared
 generator that handles connection, iteration, JSON parsing, and delta
-extraction. Both `RzobModel.execute()` and the `chat` CLI command delegate to
-this generator, eliminating duplicated SSE loops. The generator skips
-`data: [DONE]` termination and yields content deltas incrementally.
+extraction. It returns a metadata accumulator (`finish_reason`, `usage`)
+alongside the content iterator. Both `RzobModel.execute()` and the `chat`
+CLI command delegate to this generator, eliminating duplicated SSE loops.
+The generator skips `data: [DONE]` termination and yields content deltas
+incrementally. Metadata is populated during iteration — read it after the
+iterator is consumed.
 
 Non-streaming calls hit the same endpoint without the `stream` parameter.
 
@@ -140,3 +143,61 @@ All commands live under `llm fcio`, registered as a `click` group. Each
 command is a closure inside `register_commands`, capturing the CLI group
 context. Commands that need API access retrieve the `Location` from the click
 context (set by the `--location` option on the parent group).
+
+## Quality Tooling
+
+The project enforces code quality through tox environments, all runnable via `tox`:
+
+| Env | Tool | Purpose |
+|-----|------|---------|
+| `lint` | ruff | Linting + format check |
+| `type` | ty | Static type checking |
+| `complexity` | complexipy | Cyclomatic complexity gate (CC ≤ 15) |
+| `cov` | pytest | Tests with coverage report |
+
+### Linting (ruff)
+
+Ruff enforces a strict rule set: `E`, `F`, `I`, `N`, `W`, `UP`, `B`, `C4`, `SIM`, `TCH`,
+`BLE`, `B904`, `ANN`, `RUF012`, `RET504`, `FURB110`, `PLW2901`. Target: Python 3.14,
+line length 100. `BLE` and `B904` prevent bare exception hiding and missing error
+chaining. `ANN` requires type annotations on all function signatures.
+
+Run individually: `ruff check .` (lint), `ruff format --check .` (format).
+
+### Type Coverage
+
+All functions have full return type and parameter annotations. `llm` framework types
+(`Prompt`, `Response`, `Conversation`) are imported from the `llm` package. Click
+callbacks use `click.Context`, `click.Group`, etc.
+
+### Complexity Gate
+
+Every function must have cyclomatic complexity ≤ 15, enforced by `complexipy` in the
+`tox` complexity environment. When a function exceeds the threshold, extract helper
+functions following the pattern: private `_snake_case`, single responsibility, full
+type annotations.
+
+## Testing
+
+Tests live in `tests/` with pytest. The `conftest.py` registers two markers:
+
+- `live` — real API calls, requires `--run-live` flag
+- `e2e` — end-to-end tests against real HTTP servers
+
+Live tests are skipped by default to avoid API dependency in CI. Run the full suite
+with `pytest` or via `tox -e cov`.
+
+### Test Structure
+
+| File | Scope |
+|------|-------|
+| `test_helpers.py` | Pure functions (`_chunk_lines`, `_discover_files`, `_build_chat_body`) |
+| `test_streaming_renderer.py` | `_StreamingRenderer` block detection and rendering |
+| `test_cli.py` | CLI commands with mocked HTTP |
+| `test_integration.py` | Integration tests with mocked API |
+| `test_properties.py` | Property-based tests via Hypothesis |
+| `test_e2e_*.py` | End-to-end against real/dummy servers |
+| `test_live.py` | Live API calls (`@pytest.mark.live`) |
+
+Coverage target: reported via `--cov-report=term-missing`. Uncovered lines show in the
+output.

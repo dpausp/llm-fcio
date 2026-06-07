@@ -141,14 +141,8 @@ def _log_response_body(response: httpx.Response) -> None:
         _debug_console.print("  [dim](body not available)[/dim]")
 
 
-def _make_client(
-    *, verbose: bool = False, debug: bool = False, timeout: float = 30.0
-) -> httpx.Client:
-    """Create httpx.Client with optional verbose logging and/or debug header."""
-    if not verbose and not debug:
-        return httpx.Client(timeout=timeout)
-
-    debug_id = _generate_lid() if debug else None
+def _make_request_hook(debug_id: str | None, verbose: bool) -> Callable[[httpx.Request], None]:
+    """Create an httpx request hook that logs requests and optionally adds a debug header."""
 
     def _on_request(request: httpx.Request) -> None:
         if debug_id:
@@ -162,6 +156,12 @@ def _make_client(
             if request.content:
                 _log_request_body(request.content)
 
+    return _on_request
+
+
+def _make_response_hook(verbose: bool) -> Callable[[httpx.Response], None]:
+    """Create an httpx response hook that logs responses when verbose."""
+
     def _on_response(response: httpx.Response) -> None:
         if verbose:
             _debug_console.print(
@@ -171,9 +171,23 @@ def _make_client(
                 _debug_console.print(f"  [dim]{name}:[/dim] {value}")
             _log_response_body(response)
 
+    return _on_response
+
+
+def _make_client(
+    *, verbose: bool = False, debug: bool = False, timeout: float = 30.0
+) -> httpx.Client:
+    """Create httpx.Client with optional verbose logging and/or debug header."""
+    if not verbose and not debug:
+        return httpx.Client(timeout=timeout)
+
+    debug_id = _generate_lid() if debug else None
     return httpx.Client(
         timeout=timeout,
-        event_hooks={"request": [_on_request], "response": [_on_response]},
+        event_hooks={
+            "request": [_make_request_hook(debug_id, verbose)],
+            "response": [_make_response_hook(verbose)],
+        },
     )
 
 
@@ -185,6 +199,31 @@ def _auth_headers(key: str) -> dict[str, str]:
     }
 
 
+def _conversation_messages(conversation: llm.Conversation) -> list[dict]:
+    """Extract message history from conversation responses."""
+    messages: list[dict] = []
+    for r in conversation.responses:
+        if r.prompt.system:
+            messages.append({"role": "system", "content": r.prompt.system})
+        if r.prompt.prompt:
+            messages.append({"role": "user", "content": r.prompt.prompt})
+        messages.append({"role": "assistant", "content": r.text_or_raise()})  # ty: ignore[unresolved-attribute]
+    return messages
+
+
+def _build_user_content(prompt: llm.Prompt) -> list[dict]:
+    """Build user message content parts from attachments and prompt text."""
+    user_content_parts: list[dict] = []
+    for att in prompt.attachments or []:
+        att_type = att.resolve_type()
+        if att_type == "text/plain":
+            text = att.content_bytes().decode("utf-8")
+            user_content_parts.append({"type": "text", "text": text})
+    if prompt.prompt:
+        user_content_parts.append({"type": "text", "text": prompt.prompt})
+    return user_content_parts
+
+
 def _build_messages(
     prompt: llm.Prompt,
     conversation: llm.Conversation | None,
@@ -194,21 +233,8 @@ def _build_messages(
     if prompt.system:
         messages.append({"role": "system", "content": prompt.system})
     if conversation:
-        for r in conversation.responses:
-            if r.prompt.system:
-                messages.append({"role": "system", "content": r.prompt.system})
-            if r.prompt.prompt:
-                messages.append({"role": "user", "content": r.prompt.prompt})
-            messages.append({"role": "assistant", "content": r.text_or_raise()})  # ty: ignore[unresolved-attribute]
-    # Build user message with attachments
-    user_content_parts: list[dict] = []
-    for att in prompt.attachments or []:
-        att_type = att.resolve_type()
-        if att_type == "text/plain":
-            text = att.content_bytes().decode("utf-8")
-            user_content_parts.append({"type": "text", "text": text})
-    if prompt.prompt:
-        user_content_parts.append({"type": "text", "text": prompt.prompt})
+        messages.extend(_conversation_messages(conversation))
+    user_content_parts = _build_user_content(prompt)
     if user_content_parts:
         content = (
             user_content_parts[0]["text"] if len(user_content_parts) == 1 else user_content_parts
@@ -273,6 +299,35 @@ def _apply_usage(response: llm.Response, usage: dict | None) -> None:
     )
 
 
+def _parse_sse_event(data: str) -> dict | None:
+    """Parse SSE data field to JSON, returning None for [DONE] or parse errors."""
+    if data == "[DONE]":
+        return None
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError:
+        return None
+
+
+def _handle_sse_event(event: dict, meta: _SSEMetadata) -> str | None:
+    """Extract content delta from a parsed SSE event, updating metadata.
+
+    Returns the content string if present, None otherwise.
+    """
+    if "usage" in event and event["usage"]:
+        meta.usage = event["usage"]
+    choices = event.get("choices", [])
+    if not choices:
+        return None
+    choice = choices[0]
+    if choice.get("finish_reason"):
+        meta.finish_reason = choice["finish_reason"]
+    delta = choice.get("delta", {})
+    if delta.get("content"):
+        return delta["content"]
+    return None
+
+
 def _iter_sse_content(
     client: httpx.Client,
     url: str,
@@ -297,25 +352,12 @@ def _iter_sse_content(
         ) as event_source:
             event_source.response.raise_for_status()
             for sse in event_source.iter_sse():
-                if sse.data == "[DONE]":
+                event = _parse_sse_event(sse.data)
+                if event is None:
                     continue
-                try:
-                    event = json.loads(sse.data)
-                except json.JSONDecodeError:
-                    continue
-                # Collect usage from top-level event (final chunk)
-                if "usage" in event and event["usage"]:
-                    meta.usage = event["usage"]
-                choices = event.get("choices", [])
-                if not choices:
-                    continue
-                choice = choices[0]
-                # Collect finish_reason
-                if choice.get("finish_reason"):
-                    meta.finish_reason = choice["finish_reason"]
-                delta = choice.get("delta", {})
-                if delta.get("content"):
-                    yield delta["content"]
+                content = _handle_sse_event(event, meta)
+                if content:
+                    yield content
 
     return meta, _generate()
 
@@ -945,7 +987,7 @@ def get_model_info(model_id: str, loc_name: str = DEFAULT_LOCATION) -> dict:
     try:
         resp = api_request("GET", f"/models/{model_id}", key, loc.api_base)
     except ApiError as e:
-        if e.status_code == 404:
+        if e.status_code == httpx.codes.NOT_FOUND:
             raise ModelError(f"Model not found: {model_id}") from e
         raise
     return resp.json().get("data", resp.json())
@@ -1514,6 +1556,64 @@ def cmd_embed(
             click.echo(f"  Usage: {emb.get('usage', {})}")
 
 
+def _format_feature_status(status: str) -> str:
+    """Format feature status with emoji icon."""
+    if status == "available":
+        return "✅ available"
+    if status == "auth failed":
+        return "❌ auth failed"
+    return f"❌ {status}"
+
+
+def _print_models_section(label: str, models: list[dict]) -> None:
+    """Print a formatted model section with metadata."""
+    click.echo(f"{label} ({len(models)}):")
+    if not models:
+        click.echo("  (none)")
+    for m in models:
+        meta_parts: list[str] = []
+        if owned := m.get("owned_by"):
+            meta_parts.append(f"owned: {owned}")
+        if created := m.get("created"):
+            meta_parts.append(f"created: {created}")
+        meta = f"  [{', '.join(meta_parts)}]" if meta_parts else ""
+        click.echo(f"  - {m['id']}{meta}")
+    click.echo()
+
+
+def _format_capabilities_text(result: dict) -> None:
+    """Print formatted capabilities text output to stdout."""
+    ep = result["endpoint"]
+    click.echo(f"🔍 FCIO {ep['name'].upper()} Capabilities")
+    click.echo("=" * 50)
+    click.echo()
+    click.echo("Endpoint:")
+    click.echo(f"  Name:        {ep['name']}")
+    click.echo(f"  API Base:    {ep['api_base']}")
+    auth_icon = "✅" if ep["auth"] == "valid" else "❌"
+    click.echo(f"  Auth:        {auth_icon} {ep['auth']}")
+    click.echo()
+
+    _print_models_section("Chat Models", result["models"]["chat"])
+    _print_models_section("Embedding Models", result["models"]["embedding"])
+    _print_models_section("Other Models", result["models"]["other"])
+
+    feats = result["features"]
+    click.echo("Features:")
+    click.echo(
+        f"  Chat completions:  {_format_feature_status(feats['chat_completions']['status'])} (POST /chat/completions)"
+    )
+    click.echo(
+        f"  Streaming:         {_format_feature_status(feats['streaming']['status'])} (POST /chat/completions, stream)"
+    )
+    click.echo(
+        f"  Schema output:     {_format_feature_status(feats['schema_output']['status'])} (POST /chat/completions, response_format)"
+    )
+    click.echo(
+        f"  Embeddings:        {_format_feature_status(feats['embeddings']['status'])} (POST /embeddings)"
+    )
+
+
 @fcio.command("capabilities")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.pass_context
@@ -1526,56 +1626,7 @@ def cmd_capabilities(ctx: click.Context, as_json: bool) -> None:
         click.echo(json.dumps(result, indent=2))
         return
 
-    ep = result["endpoint"]
-    click.echo(f"🔍 FCIO {ep['name'].upper()} Capabilities")
-    click.echo("=" * 50)
-    click.echo()
-    click.echo("Endpoint:")
-    click.echo(f"  Name:        {ep['name']}")
-    click.echo(f"  API Base:    {ep['api_base']}")
-    auth_icon = "✅" if ep["auth"] == "valid" else "❌"
-    click.echo(f"  Auth:        {auth_icon} {ep['auth']}")
-    click.echo()
-
-    def _print_models(label: str, models: list[dict]) -> None:
-        click.echo(f"{label} ({len(models)}):")
-        if not models:
-            click.echo("  (none)")
-        for m in models:
-            meta_parts: list[str] = []
-            if owned := m.get("owned_by"):
-                meta_parts.append(f"owned: {owned}")
-            if created := m.get("created"):
-                meta_parts.append(f"created: {created}")
-            meta = f"  [{', '.join(meta_parts)}]" if meta_parts else ""
-            click.echo(f"  - {m['id']}{meta}")
-        click.echo()
-
-    _print_models("Chat Models", result["models"]["chat"])
-    _print_models("Embedding Models", result["models"]["embedding"])
-    _print_models("Other Models", result["models"]["other"])
-
-    def _status_icon(s: str) -> str:
-        if s == "available":
-            return "✅ available"
-        if s == "auth failed":
-            return "❌ auth failed"
-        return f"❌ {s}"
-
-    feats = result["features"]
-    click.echo("Features:")
-    click.echo(
-        f"  Chat completions:  {_status_icon(feats['chat_completions']['status'])} (POST /chat/completions)"
-    )
-    click.echo(
-        f"  Streaming:         {_status_icon(feats['streaming']['status'])} (POST /chat/completions, stream)"
-    )
-    click.echo(
-        f"  Schema output:     {_status_icon(feats['schema_output']['status'])} (POST /chat/completions, response_format)"
-    )
-    click.echo(
-        f"  Embeddings:        {_status_icon(feats['embeddings']['status'])} (POST /embeddings)"
-    )
+    _format_capabilities_text(result)
 
     # ── simulate ────────────────────────────────────────────
 
@@ -1893,6 +1944,20 @@ def _build_chat_body(
     return body
 
 
+def _render_or_echo(content_iter: Iterator[str], renderer: _StreamingRenderer | None) -> None:
+    """Consume content iterator, feeding to renderer or echoing to stdout."""
+    render = renderer is not None
+    for content in content_iter:
+        if render:
+            renderer.feed(content)
+        else:
+            click.echo(content, nl=False)
+    if render:
+        renderer.flush()
+    else:
+        click.echo()
+
+
 def _stream_chat_response(key: str, body: dict, api_base: str, render: bool) -> None:
     """Stream chat response with optional rich rendering."""
     try:
@@ -1901,15 +1966,7 @@ def _stream_chat_response(key: str, body: dict, api_base: str, render: bool) -> 
             url = f"{api_base}/chat/completions"
             headers = _auth_headers(key)
             meta, content_iter = _iter_sse_content(client, url, headers, body)
-            for content in content_iter:
-                if render and renderer is not None:
-                    renderer.feed(content)
-                else:
-                    click.echo(content, nl=False)
-        if render and renderer is not None:
-            renderer.flush()
-        else:
-            click.echo()
+            _render_or_echo(content_iter, renderer)
     except ApiError:
         raise
     except httpx.HTTPError as e:
