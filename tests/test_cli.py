@@ -1490,3 +1490,109 @@ def test_templates_available_via_fcio_prefix() -> None:
     assert all(isinstance(name, str) for name in templates)
     assert "review" in templates
     assert "overview" in templates
+
+
+# ── register_template_loaders hook ──────────────────────────
+
+
+def test_register_template_loaders_hook() -> None:
+    """register_template_loaders calls register with 'fcio' and the loader."""
+    from llm_fcio import fcio_template_loader, register_template_loaders
+
+    mock_register = MagicMock()
+    register_template_loaders(mock_register)
+    mock_register.assert_called_once_with("fcio", fcio_template_loader)
+
+
+# ── ingest: no files without --yes ──────────────────────────
+
+
+def test_ingest_no_files_without_yes(
+    runner: CliRunner,
+    cli: click.Group,
+    tmp_path: Path,
+) -> None:
+    """Without --yes and empty directory raises ClickException at discovery."""
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    result = runner.invoke(cli, ["fcio", "ingest", "testcol", str(empty_dir)])
+    assert result.exit_code != 0
+    assert "No files found matching criteria" in result.output
+
+
+# ── ingest: existing collection reuse ───────────────────────
+
+
+@patch("llm_fcio.sqlite_utils.Database")
+@patch("llm_fcio.llm.Collection")
+@patch("llm_fcio.llm.user_dir")
+def test_ingest_existing_collection_reuses(
+    mock_user_dir: MagicMock,
+    mock_collection_cls: MagicMock,
+    _mock_db: MagicMock,
+    runner: CliRunner,
+    cli: click.Group,
+    tmp_path: Path,
+) -> None:
+    """When collection already exists, it is loaded without model_id."""
+    mock_user_dir.return_value = tmp_path
+    mock_col = MagicMock()
+    mock_col.model.return_value.model_id = "bge-m3-567m"
+    mock_collection_cls.exists.return_value = True
+    mock_collection_cls.return_value = mock_col
+
+    doc = tmp_path / "test.md"
+    doc.write_text("# Test\nHello world\nLine 3\nLine 4\n")
+
+    result = runner.invoke(cli, ["fcio", "ingest", "testcol", str(doc), "--yes"])
+    assert result.exit_code == 0
+    assert "Ingested" in result.output
+    # Existing collection loaded with just (name, db) — no model_id
+    mock_collection_cls.assert_called_once_with("testcol", _mock_db.return_value)
+
+
+# ── ingest: empty file produces zero chunks ─────────────────
+
+
+@patch("llm_fcio.sqlite_utils.Database")
+@patch("llm_fcio.llm.Collection")
+@patch("llm_fcio.llm.user_dir")
+def test_ingest_empty_file_zero_chunks(
+    mock_user_dir: MagicMock,
+    mock_collection_cls: MagicMock,
+    _mock_db: MagicMock,
+    runner: CliRunner,
+    cli: click.Group,
+    tmp_path: Path,
+) -> None:
+    """Empty file is found but produces 0 chunks — ingest returns error."""
+    mock_user_dir.return_value = tmp_path
+    mock_col = MagicMock()
+    mock_col.model.return_value.model_id = "bge-m3-567m"
+    mock_collection_cls.exists.return_value = False
+    mock_collection_cls.return_value = mock_col
+
+    doc = tmp_path / "empty.md"
+    doc.write_text("")
+
+    result = runner.invoke(cli, ["fcio", "ingest", "testcol", str(doc), "--yes"])
+    assert result.exit_code != 0
+    assert "No files found" in result.output
+
+
+# ── analyze: happy path with files ──────────────────────────
+
+
+def test_analyze_with_files_happy_path(
+    runner: CliRunner,
+    cli: click.Group,
+    tmp_path: Path,
+) -> None:
+    """Analyze with actual files prints file info and analysis result."""
+    code_file = tmp_path / "example.py"
+    code_file.write_text("x = 1\ny = 2\n")
+    with patch("llm_fcio.analyze_code", return_value="Code review: looks good"):
+        result = runner.invoke(cli, ["fcio", "analyze", "review", str(code_file)])
+    assert result.exit_code == 0
+    assert "Code review: looks good" in result.output
+    assert "tokens" in result.output.lower()

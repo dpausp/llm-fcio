@@ -156,3 +156,47 @@ def test_fcio_focus_option_passed() -> None:
 
     mock_analyze.assert_called_once()
     assert mock_analyze.call_args.kwargs["focus"] == "fix"
+
+
+def test_terminal_summary_empty_failures_from_collect() -> None:
+    """Reports under 'failed' key but collect_failures returns empty — early return."""
+    non_failed_report = _FakeTestReport(outcome="passed", call=None)
+
+    mock_tr = MagicMock()
+    mock_tr.stats = {"failed": [non_failed_report]}
+    config = _make_mock_config(analyze=True)
+
+    with patch("llm_fcio.analyze_failures") as mock_analyze:
+        pytest_terminal_summary(mock_tr, exitstatus=1, config=config)
+
+    mock_analyze.assert_not_called()
+
+
+def test_terminal_summary_analysis_exception_prints_error() -> None:
+    """analyze_failures raising prints ERROR message and returns early."""
+    failed_report = _make_failed_report()
+
+    mock_tr = MagicMock()
+    mock_tr.stats = {"failed": [failed_report]}
+    config = _make_mock_config(analyze=True)
+
+    with patch("llm_fcio.analyze_failures", side_effect=RuntimeError("API down")):
+        pytest_terminal_summary(mock_tr, exitstatus=1, config=config)
+
+    written = "\n".join(c.args[0] for c in mock_tr.write_line.call_args_list)
+    assert "ERROR" in written
+    assert "API down" in written
+
+
+def test_terminal_summary_empty_analysis_no_output() -> None:
+    """analyze_failures returning empty string — no analysis section printed."""
+    failed_report = _make_failed_report()
+
+    mock_tr = MagicMock()
+    mock_tr.stats = {"failed": [failed_report]}
+    config = _make_mock_config(analyze=True)
+
+    with patch("llm_fcio.analyze_failures", return_value=""):
+        pytest_terminal_summary(mock_tr, exitstatus=1, config=config)
+
+    mock_tr.write_line.assert_not_called()

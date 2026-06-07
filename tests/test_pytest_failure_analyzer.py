@@ -5,6 +5,7 @@ that extract failure info from pytest reports and build LLM prompts.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from unittest.mock import patch
 
 from tests.fakes import FakeModel, FakeResponse
@@ -265,3 +266,47 @@ def test_analyze_failures_passes_focus_to_prompt() -> None:
         analyze_failures([_analysis_failure()], focus="fix")
     prompt_text = fake_model.last_prompt_args[0] if fake_model.last_prompt_args else ""
     assert "code suggestions" in prompt_text
+
+
+# ── analyze_code ──────────────────────────────────────────────────
+
+
+def test_analyze_code_with_files_returns_text(tmp_path: Path) -> None:
+    """analyze_code reads files and returns model response."""
+    from llm_fcio import analyze_code
+
+    code_file = tmp_path / "example.py"
+    code_file.write_text("x = 1\n")
+
+    fake_response = FakeResponse(chunks=("Code looks good",))
+    fake_model = FakeModel(response=fake_response)
+    with patch("llm_fcio.llm.get_model", return_value=fake_model):
+        result = analyze_code("review", files=[str(code_file)], model_id="test-model")
+
+    assert result == "Code looks good"
+    assert fake_model.last_prompt_kwargs.get("system") is not None
+
+
+def test_analyze_code_no_files_returns_empty() -> None:
+    """analyze_code returns empty string when no files are found."""
+    from llm_fcio import analyze_code
+
+    with patch("llm_fcio.collect_code_files", return_value=[]):
+        result = analyze_code("review", files=None)
+
+    assert result == ""
+
+
+def test_analyze_code_default_model_id(tmp_path: Path) -> None:
+    """analyze_code uses fcio-{loc_name}/gpt-oss-20b-20b when model_id is None."""
+    from llm_fcio import analyze_code
+
+    code_file = tmp_path / "example.py"
+    code_file.write_text("x = 1\n")
+
+    fake_response = FakeResponse()
+    fake_model = FakeModel(response=fake_response)
+    with patch("llm_fcio.llm.get_model", return_value=fake_model) as mock_get:
+        analyze_code("review", files=[str(code_file)], model_id=None, loc_name="rzob")
+
+    mock_get.assert_called_once_with("fcio-rzob/gpt-oss-20b-20b")

@@ -5,7 +5,7 @@ Each test targets specific uncovered lines in the _StreamingRenderer class
 """
 
 from typing import TYPE_CHECKING
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from llm_fcio import _Block, _StreamingRenderer
 
@@ -195,3 +195,47 @@ def test_feed_code_with_language_then_close() -> None:
     renderer.feed("```python\nx = 1\ny = 2\n```\n")
     assert renderer._active.kind == "text"
     assert renderer._active.content == []
+
+
+# ── install_renderer_patch ──────────────────────────────────────
+
+
+def test_install_renderer_patch_idempotent() -> None:
+    """Second call returns early — idempotency guard (line 699)."""
+    import llm
+
+    from llm_fcio import install_renderer_patch
+
+    original = llm.Response.__iter__
+    try:
+        with patch("sys.stdout.isatty", return_value=True):
+            install_renderer_patch()
+            first = llm.Response.__iter__
+            install_renderer_patch()
+            assert llm.Response.__iter__ is first
+    finally:
+        llm.Response.__iter__ = original
+
+
+def test_install_renderer_patch_renderer_error_fallback() -> None:
+    """When _StreamingRenderer() raises, patched iter falls back to original."""
+    import llm
+
+    from llm_fcio import install_renderer_patch
+
+    original = llm.Response.__iter__
+    try:
+        with patch("sys.stdout.isatty", return_value=True):
+            install_renderer_patch()
+
+        patched = llm.Response.__iter__
+
+        with patch("llm_fcio._StreamingRenderer", side_effect=RuntimeError("init fail")):
+            mock_resp = MagicMock(spec=llm.Response)
+            mock_resp._done = True
+            mock_resp._chunks = ["fallback_chunk"]
+            result = list(patched(mock_resp))
+
+        assert result == ["fallback_chunk"]
+    finally:
+        llm.Response.__iter__ = original

@@ -825,27 +825,82 @@ def test_execute_with_attachment(
 def test_execute_with_all_options(
     mocked_api: MockRouter,
     rzob_model: RzobModel,
-    simple_response: llm.Response,
     api_key: str,
 ) -> None:
-    """Execute with top_p, tools, response_format options forwarded."""
+    """execute() forwards temperature, max_tokens, top_p, and tools to the body."""
     route = mocked_api.post(f"{API_BASE}/chat/completions").mock(
-        return_value=httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        )
     )
-    prompt = llm.Prompt(
-        "test",
-        model=rzob_model,
-        options=RzobModel.Options(
-            top_p=0.9,
-            tools=[{"type": "function", "function": {"name": "test"}}],
-            response_format={"type": "json_object"},
-        ),
+    opts = RzobModel.Options(
+        temperature=0.7,
+        max_tokens=100,
+        top_p=0.9,
+        tools=[{"type": "function", "function": {"name": "test"}}],
+        response_format={"type": "json_object"},
     )
-    list(rzob_model.execute(prompt, False, simple_response, None, api_key))
+    prompt = llm.Prompt("go", model=rzob_model, options=opts)
+    response = llm.Response(model=rzob_model, prompt=prompt, stream=False)
+    list(rzob_model.execute(prompt, False, response, None, api_key))
     body = json.loads(route.calls[0].request.content)
+    assert body["temperature"] == 0.7
+    assert body["max_tokens"] == 100
     assert body["top_p"] == 0.9
     assert body["tools"] == [{"type": "function", "function": {"name": "test"}}]
     assert body["response_format"] == {"type": "json_object"}
+
+
+def test_execute_no_key_raises_value_error(
+    rzob_model: RzobModel,
+    simple_prompt: llm.Prompt,
+    simple_response: llm.Response,
+) -> None:
+    """execute() raises ValueError when no API key is available."""
+    rzob_model.get_key = lambda: None  # type: ignore[assignment]
+    with pytest.raises(ValueError, match="API key required"):
+        list(rzob_model.execute(simple_prompt, False, simple_response, None, None))
+
+
+def test_embed_batch_no_key_raises_value_error(
+    embed_model: RzobEmbeddingModel,
+) -> None:
+    """embed_batch() raises ValueError when no API key is available."""
+    embed_model.get_key = lambda: None  # type: ignore[assignment]
+    with pytest.raises(ValueError, match="API key required"):
+        list(embed_model.embed_batch(["test text"]))
+
+
+def test_execute_schema_sets_json_schema_body(
+    mocked_api: MockRouter,
+    rzob_model: RzobModel,
+    api_key: str,
+) -> None:
+    """execute() builds json_schema response_format when prompt.schema is set."""
+    route = mocked_api.post(f"{API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"name":"Alice"}'}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        )
+    )
+    prompt = llm.Prompt(
+        "extract name",
+        model=rzob_model,
+        options=RzobModel.Options(),
+        schema={"type": "object", "properties": {"name": {"type": "string"}}},
+    )
+    response = llm.Response(model=rzob_model, prompt=prompt, stream=False)
+    list(rzob_model.execute(prompt, False, response, None, api_key))
+    body = json.loads(route.calls[0].request.content)
+    assert body["response_format"]["type"] == "json_schema"
+    assert body["response_format"]["json_schema"]["name"] == "response"
 
 
 # ── __str__ ─────────────────────────────────────────────────

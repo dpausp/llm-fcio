@@ -1900,7 +1900,6 @@ def cmd_analyze(
         click.echo(f"No code files found in {Path.cwd()}")
         click.echo("Specify files explicitly or check file extensions")
         ctx.exit(1)
-        return
 
     # Display file list with sizes and token estimate
     total_chars = 0
